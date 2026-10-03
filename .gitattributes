@@ -1,0 +1,6 @@
+library/** filter=lfs diff=lfs merge=lfs -text
+data/music/*.mp3 filter=lfs diff=lfs merge=lfs -text
+data/music/*.ogg filter=lfs diff=lfs merge=lfs -text
+data/music/*.wav filter=lfs diff=lfs merge=lfs -text
+data/music/*.m4a filter=lfs diff=lfs merge=lfs -text
+data/music/*.aac filter=lfs diff=lfs merge=lfs -text

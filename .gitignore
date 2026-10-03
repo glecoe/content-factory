@@ -6,10 +6,9 @@ __pycache__/
 .DS_Store
 
 # рабочие данные завода: изделия, ролики, оценки, ресёрч, журналы
+# (музыка data/music хранится в git: треки через Git LFS, см. .gitattributes)
 data/*
 !data/music/
-data/music/*
-!data/music/.gitkeep
 
 # служебное
 _backup/

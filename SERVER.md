@@ -31,7 +31,9 @@ claude setup-token
 rsync -av --exclude .venv ~/Documents/content-factory/ user@server:/home/factory/content-factory/
 ```
 
-`data/` — это все изделия, ролики, оценки и профиль вкуса; `.env` — ключи (права 600).
+`data/` — это все изделия, ролики, оценки и профиль вкуса; `.env` — ключи (права 600); `library/` — библиотека
+съёмки «По изделиям». Если ставишь сервер через `git clone`, сначала `sudo apt install -y git-lfs && git lfs install`,
+иначе в `library/` окажутся текстовые заглушки вместо фото и видео.
 
 ## 4. Доступ из браузера
 

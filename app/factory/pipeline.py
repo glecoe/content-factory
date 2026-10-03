@@ -4,7 +4,7 @@ from __future__ import annotations
 import time
 from pathlib import Path
 
-from . import store, media, llm, gen, montage, brains, publish
+from . import store, media, llm, gen, montage, brains, publish, library
 from .config import MUSIC, demo_mode, int_setting, settings, provider
 
 
@@ -38,7 +38,7 @@ PHOTO_EXT = {".jpg", ".jpeg", ".png", ".heic", ".heif", ".webp", ".tif", ".tiff"
 VIDEO_EXT = {".mp4", ".mov", ".m4v", ".avi", ".mkv"}
 
 
-def add_file(pid: str, filename: str, data: bytes, label: str = "") -> dict:
+def add_file(pid: str, filename: str, data: bytes, label: str = "", source: str = "") -> dict:
     d = _pdir(pid)
     safe = "".join(ch for ch in Path(filename).name if ch.isalnum() or ch in "._-") or "file"
     ext = Path(safe).suffix.lower()
@@ -48,6 +48,8 @@ def add_file(pid: str, filename: str, data: bytes, label: str = "") -> dict:
         out = d / "prepared" / (raw.stem + ".jpg")
         media.prepare_photo(raw, out)
         item = {"file": out.name, "label": label, "orig": raw.name}
+        if source:
+            item["source"] = source
         store.update_product(pid, lambda p: p["photos"].append(item))
         return {"kind": "photo", **item}
     if ext in VIDEO_EXT:
@@ -58,10 +60,18 @@ def add_file(pid: str, filename: str, data: bytes, label: str = "") -> dict:
         frames = media.best_frames_from_video(out, d / "frames", n=4)
         item = {"file": out.name, "orig": raw.name, "duration": round(info["duration"], 2),
                 "width": info["width"], "height": info["height"], "frames": [f.name for f in frames]}
+        if source:
+            item["source"] = source
         store.update_product(pid, lambda p: p.__setitem__("video", item))
         return {"kind": "video", **item}
     raw.unlink(missing_ok=True)
     raise ValueError(f"Неподдерживаемый формат: {ext}. Фото: jpg/png/heic, видео: mp4/mov.")
+
+
+def add_from_library(pid: str, rel: str) -> dict:
+    """Фото или видео из библиотеки «По изделиям» — тем же путём, что и ручная загрузка."""
+    f = library.resolve(rel)
+    return add_file(pid, f.name, f.read_bytes(), library.label(f.name), source=rel)
 
 
 def remove_file(pid: str, kind: str, name: str):

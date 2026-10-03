@@ -9,6 +9,7 @@ DATA = ROOT / "data"
 PRODUCTS = DATA / "products"
 MUSIC = DATA / "music"
 RESEARCH = DATA / "research"
+LIBRARY = ROOT / "library"                          # библиотека съёмки «По изделиям» (в git через LFS)
 ENV_FILE = ROOT / ".env"
 
 for p in (DATA, PRODUCTS, MUSIC, RESEARCH, RESEARCH / "refs", RESEARCH / "briefs"):
@@ -42,6 +43,7 @@ DEFAULTS = {
     "VERTICAL_MODE": "nb2",      # nb2 = дорисовать фото до 9:16 (Nano Banana 2), blur = размытый фон, off
     "MONTAGE_FIT": "crop",       # crop = обрезать под 9:16, blur = вписать на размытый фон
     "APIFY_TOKEN": "",
+    "LIBRARY_DIR": "",           # своя папка библиотеки; пусто = library/ в проекте
     # Сервер
     "HOST": "127.0.0.1",
     "PORT": "8765",
@@ -134,6 +136,7 @@ def public_settings():
         "auto_retry": int_setting("AUTO_RETRY", 1),
         "vertical_mode": s.get("VERTICAL_MODE", "nb2"),
         "montage_fit": s.get("MONTAGE_FIT", "crop"),
+        "library_dir": s.get("LIBRARY_DIR", ""),
         "host": s.get("HOST"), "port": s.get("PORT"), "auth_user": s.get("AUTH_USER"),
     }
 

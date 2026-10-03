@@ -18,7 +18,7 @@ from urllib.parse import urlparse, parse_qs, unquote
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from factory import config, store, pipeline, jobs, media, montage, brains, research, gen  # noqa: E402
+from factory import config, store, pipeline, jobs, media, montage, brains, research, gen, library  # noqa: E402
 from factory.config import DATA, APP, MODELS  # noqa: E402
 
 STATIC = APP / "static"
@@ -137,6 +137,10 @@ class Handler(BaseHTTPRequestHandler):
                     "taste": store.taste_text(), "music": montage.music_tracks(),
                     "ratings": len(store.ratings()), "jobs": jobs.active(), "brains": brains.status(),
                     "research": {"active": research.active_id(), "briefs": len(research.list_briefs())}})
+            if path == "/api/library":
+                return self._json(library.list_items())
+            if path == "/library/thumb":
+                return self._file(library.thumb(parse_qs(u.query).get("f", [""])[0]))
             if path == "/api/research":
                 bid = research.active_id()
                 return self._json({"config": research.load_config(), "briefs": research.list_briefs(), "active": bid,
@@ -227,6 +231,8 @@ class Handler(BaseHTTPRequestHandler):
                 name = qs.get("name", ["file"])[0]
                 label = qs.get("label", [""])[0]
                 return self._json(pipeline.add_file(pid, name, self._body(), label))
+            if action == "fromlibrary":
+                return self._json(pipeline.add_from_library(pid, self._jbody().get("file", "")))
             if action == "remove":
                 b = self._jbody()
                 return self._json(pipeline.remove_file(pid, b.get("kind"), b.get("file")))

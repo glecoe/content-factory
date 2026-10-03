@@ -162,6 +162,8 @@ function tabItem(t, p) {
     <p class="hint">3–4 фото (анфас, профиль, 3/4 сверху, на пальце) и одно видео 10–15 секунд: кольцо на руке, кисть медленно поворачивается. Видео обрежется до 5 секунд — столько стоит обработка.</p>
     <div class="drop" id="drop">Перетащи сюда фото и видео или нажми, чтобы выбрать файлы
       <input type="file" id="fileIn" multiple accept="image/*,video/*,.heic,.HEIC" hidden></div>
+    <div class="row" style="margin-top:10px"><span class="meta">или</span>
+      <button class="btn" id="fromLib">Выбрать из библиотеки «По изделиям»</button></div>
     <div class="files" id="files"></div>
   </div>`;
   const files = $("#files");
@@ -172,6 +174,7 @@ function tabItem(t, p) {
   files.querySelectorAll("button").forEach((b) => (b.onclick = async () => {
     S.product = await api(`/api/products/${p.id}/remove`, { body: { kind: b.dataset.k, file: b.dataset.f } }); render();
   }));
+  $("#fromLib").onclick = () => guard(openLibrary);
   $("#saveItem").onclick = saveItem;
   $("#passport").onclick = async () => { await saveItem(true); startJob(await api(`/api/products/${p.id}/passport`, { body: {} })); };
   const drop = $("#drop"), inp = $("#fileIn");
@@ -743,6 +746,11 @@ function renderSettings(v, top) {
     </div>
   </div>
 
+  <div class="panel"><h2>Библиотека съёмки</h2>
+    <p class="hint">Фото и видео «По изделиям» лежат в папке <code>library/</code> проекта: внутри по папке на изделие. Из неё выбираются файлы на вкладке «Изделие». Новые съёмки клади туда же.</p>
+    <div class="field"><label>Другая папка библиотеки (необязательно; пусто — <code>library/</code> в проекте)</label><input type="text" id="s_lib" value="${esc(st.library_dir || "")}" placeholder="library"></div>
+  </div>
+
   <div class="panel"><h2>Сервер</h2>
     <p class="hint">Пока работаешь на Mac — не трогай. На сервере: HOST 0.0.0.0 и обязательно пароль (без пароля наружу не откроется). Применяется после перезапуска.</p>
     <div class="grid2">
@@ -765,11 +773,94 @@ function renderSettings(v, top) {
       CLAUDE_CODE_OAUTH_TOKEN: $("#s_tok").value, AUTH_PASSWORD: $("#s_pw").value,
       GEMINI_MODEL: $("#s_gm").value, DAILY_LIMIT_USD: $("#s_lim").value, DEMO_MODE: $("#s_demo").checked ? "1" : "0",
       CLAUDE_MODEL: $("#s_cm").value, CLAUDE_BIN: $("#s_cb").value, CONCEPTS_N: $("#s_cn").value, AUTO_RETRY: $("#s_ar").value,
-      VERTICAL_MODE: $("#s_vm").value, MONTAGE_FIT: $("#s_mf").value, HOST: $("#s_host").value, PORT: $("#s_port").value, AUTH_USER: $("#s_user").value };
+      VERTICAL_MODE: $("#s_vm").value, MONTAGE_FIT: $("#s_mf").value, LIBRARY_DIR: $("#s_lib").value, HOST: $("#s_host").value, PORT: $("#s_port").value, AUTH_USER: $("#s_user").value };
     v.querySelectorAll("[data-role]").forEach((s) => (body["PROVIDER_" + s.dataset.role.toUpperCase()] = s.value));
     await api("/api/settings", { body });
     toast("Настройки сохранены"); await refresh();
   });
+}
+
+// ---------------------------------------------------------------- библиотека «По изделиям»
+const libThumb = (path) => `/library/thumb?f=${encodeURIComponent(path)}`;
+async function openLibrary() {
+  const lib = await api("/api/library");
+  if (!lib.ok) {
+    toast(`Папка библиотеки не найдена: ${lib.root}`, true);
+    S.page = "settings"; render(); return;
+  }
+  const ov = document.createElement("div");
+  ov.className = "overlay";
+  ov.innerHTML = `<div class="dialog" role="dialog" aria-modal="true" aria-label="Библиотека «По изделиям»"></div>`;
+  document.body.appendChild(ov);
+  const dlg = $(".dialog", ov);
+  const close = () => { ov.remove(); document.removeEventListener("keydown", onKey); };
+  const onKey = (e) => { if (e.key === "Escape") close(); };
+  document.addEventListener("keydown", onKey);
+  ov.onclick = (e) => { if (e.target === ov) close(); };
+  let query = "";
+
+  const grid = () => {
+    const q = query.trim().toLowerCase();
+    const items = lib.items.filter((it) => !q || it.id.toLowerCase().includes(q) || it.code.toLowerCase().includes(q));
+    dlg.innerHTML = `<div class="dlg-head"><h2>Библиотека «По изделиям»</h2>
+        <input type="search" id="libQ" placeholder="Номер папки или артикул" value="${esc(query)}">
+        <button class="btn ghost" data-close>Закрыть</button></div>
+      <div class="lib-grid">${items.map((it) => `<button class="lib-card" data-id="${esc(it.id)}">
+          <img src="${libThumb(it.cover)}" alt="" loading="lazy">
+          <div class="lib-cap"><b>№ ${esc(it.id)}</b> ${esc(it.code)}<div class="meta">фото: ${it.photos} · видео: ${it.videos}</div></div>
+        </button>`).join("") || `<p class="meta">Ничего не нашлось</p>`}</div>`;
+    $("[data-close]", dlg).onclick = close;
+    const qi = $("#libQ", dlg);
+    qi.oninput = () => { query = qi.value; grid(); const n = $("#libQ", dlg); n.focus(); n.setSelectionRange(n.value.length, n.value.length); };
+    dlg.querySelectorAll(".lib-card").forEach((b) => (b.onclick = () => folder(lib.items.find((it) => it.id === b.dataset.id))));
+  };
+
+  const folder = (it) => {
+    const p = S.product;
+    const have = new Set([...p.photos.map((x) => x.source), p.video?.source].filter(Boolean));
+    const sel = new Set(it.files.filter((f) => f.kind === "photo" && !have.has(f.path)).map((f) => f.path));
+    const draw = () => {
+      dlg.innerHTML = `<div class="dlg-head"><button class="btn ghost" data-back>← Все изделия</button>
+          <h2>№ ${esc(it.id)} ${esc(it.code)}</h2><button class="btn ghost" data-close>Закрыть</button></div>
+        <p class="hint">Отметь файлы для изделия. Видео можно взять одно — оно обрежется до 5 секунд, как при ручной загрузке.</p>
+        <div class="lib-grid">${it.files.map((f) => {
+          const added = have.has(f.path);
+          return `<label class="lib-card ${sel.has(f.path) ? "on" : ""} ${added ? "added" : ""}" title="${esc(f.name)}">
+            <input type="checkbox" data-f="${esc(f.path)}" ${sel.has(f.path) ? "checked" : ""} ${added ? "disabled" : ""}>
+            <img src="${libThumb(f.path)}" alt="" loading="lazy">
+            <div class="lib-cap">${f.kind === "video" ? "видео" : "фото"}${f.label ? " · " + esc(f.label) : ""}
+              <div class="meta">${added ? "уже добавлено" : (f.size / 1048576).toFixed(1) + " МБ"}</div></div></label>`;
+        }).join("")}</div>
+        <div class="row dlg-foot"><button class="btn primary" data-add ${sel.size ? "" : "disabled"}>Добавить выбранные (${sel.size})</button></div>`;
+      $("[data-close]", dlg).onclick = close;
+      $("[data-back]", dlg).onclick = grid;
+      dlg.querySelectorAll("input[data-f]").forEach((c) => (c.onchange = () => {
+        const f = it.files.find((x) => x.path === c.dataset.f);
+        if (c.checked) {
+          if (f.kind === "video") it.files.forEach((x) => x.kind === "video" && sel.delete(x.path));
+          sel.add(f.path);
+        } else sel.delete(f.path);
+        draw();
+      }));
+      $("[data-add]", dlg).onclick = () => addFromLibrary(it, [...sel], close);
+    };
+    draw();
+  };
+  grid();
+}
+async function addFromLibrary(it, files, close) {
+  const p = S.product;
+  close();
+  let n = 0;
+  for (const f of files) {
+    toast(`Добавляю ${++n} из ${files.length}…`);
+    try { await api(`/api/products/${p.id}/fromlibrary`, { body: { file: f } }); }
+    catch (e) { toast(e.message, true); }
+  }
+  // новое изделие без названия получает артикул из библиотеки
+  if (it.code && (!p.name || p.name === "Новое кольцо"))
+    await guard(() => api(`/api/products/${p.id}/update`, { body: { name: it.code } }));
+  await loadProduct(p.id); await loadState(); render(); toast("Файлы из библиотеки добавлены");
 }
 
 // ---------------------------------------------------------------- задачи
