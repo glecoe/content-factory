@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
 import uuid
@@ -17,6 +18,8 @@ PHOTO_EXT = {".jpg", ".jpeg", ".png", ".heic", ".heif", ".webp"}
 VIDEO_EXT = {".mp4", ".mov", ".m4v"}
 THUMBS = DATA / "library_thumbs"
 LABELS = (("model", "на модели"), ("catalog", "каталог"), ("banner", "баннер"))
+INFO_FILE = "product.json"           # данные изделия в его папке: поля карточки
+INFO_FIELDS = ("name", "brand", "price", "promo", "link", "description_ru", "visual_en")
 
 
 def _configured() -> Path:
@@ -56,6 +59,21 @@ def _code(name: str) -> str:
     return re.sub(r"_(onmodel|banner)$", "", code, flags=re.I)
 
 
+def read_info(d: Path) -> tuple[dict | None, str]:
+    """product.json папки изделия → (поля карточки + article, ошибка). Нет файла — (None, "")."""
+    f = d / INFO_FILE
+    if not f.is_file():
+        return None, ""
+    try:
+        raw = json.loads(f.read_text(encoding="utf-8-sig"))
+    except (ValueError, OSError) as e:
+        return None, f"{INFO_FILE}: {e}"
+    if not isinstance(raw, dict):
+        return None, f"{INFO_FILE}: нужен объект {{…}}"
+    info = {k: str(raw.get(k) or "").strip() for k in ("article", *INFO_FIELDS)}
+    return info, ""
+
+
 def list_items() -> dict:
     r = root()
     if not r:
@@ -74,8 +92,10 @@ def list_items() -> dict:
         code = max(set(codes), key=codes.count) if codes else ""
         photos = [f for f in files if f["kind"] == "photo"]
         cover = next((f for f in photos if f["label"] == "каталог"), photos[0] if photos else files[0])
-        items.append({"id": d.name, "code": code, "cover": cover["path"], "files": files,
-                      "photos": len(photos), "videos": len(files) - len(photos)})
+        info, info_error = read_info(d)
+        items.append({"id": d.name, "code": (info or {}).get("article") or code, "cover": cover["path"],
+                      "files": files, "photos": len(photos), "videos": len(files) - len(photos),
+                      "info": info, "info_error": info_error})
     return {"root": str(r), "ok": True, "items": items}
 
 

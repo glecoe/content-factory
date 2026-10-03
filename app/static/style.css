@@ -214,3 +214,6 @@ details summary{cursor:pointer}
 .lib-cap{padding:6px 8px;line-height:1.35;word-break:break-word}
 .lib-cap .meta{font-size:12px}
 .dialog .hint{color:var(--muted);font-size:14px;margin:0 0 12px}
+.lib-info{display:flex;gap:10px;align-items:flex-start;background:var(--mist);border-radius:10px;padding:10px 12px;margin:0 0 12px;font-size:14px;line-height:1.45}
+.lib-info input{margin-top:3px;width:16px;height:16px;accent-color:var(--emerald);flex:none}
+.lib-info.err{background:var(--red-s);color:var(--red)}

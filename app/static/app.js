@@ -782,6 +782,12 @@ function renderSettings(v, top) {
 
 // ---------------------------------------------------------------- библиотека «По изделиям»
 const libThumb = (path) => `/library/thumb?f=${encodeURIComponent(path)}`;
+const INFO_FIELDS = ["name", "brand", "price", "promo", "link", "description_ru", "visual_en"];
+const FIELD_RU = { name: "Название", brand: "Бренд", price: "Цена", promo: "Промокод", link: "Ссылка" };
+const libTitle = (it) => it.info?.name || it.code;
+// артикулы пишут то кириллицей, то латиницей (К/K, С/C, П…): сравниваем в одном алфавите
+const LOOKALIKE = { a: "а", b: "в", c: "с", e: "е", h: "н", k: "к", m: "м", o: "о", p: "р", t: "т", x: "х", y: "у" };
+const libNorm = (s) => String(s || "").normalize("NFC").toLowerCase().replace(/[a-z]/g, (ch) => LOOKALIKE[ch] || ch);
 async function openLibrary() {
   const lib = await api("/api/library");
   if (!lib.ok) {
@@ -800,14 +806,14 @@ async function openLibrary() {
   let query = "";
 
   const grid = () => {
-    const q = query.trim().toLowerCase();
-    const items = lib.items.filter((it) => !q || it.id.toLowerCase().includes(q) || it.code.toLowerCase().includes(q));
+    const q = libNorm(query.trim());
+    const items = lib.items.filter((it) => !q || [it.id, it.code, it.info?.name].some((v) => libNorm(v).includes(q)));
     dlg.innerHTML = `<div class="dlg-head"><h2>Библиотека «По изделиям»</h2>
-        <input type="search" id="libQ" placeholder="Номер папки или артикул" value="${esc(query)}">
+        <input type="search" id="libQ" placeholder="Номер папки, артикул или название" value="${esc(query)}">
         <button class="btn ghost" data-close>Закрыть</button></div>
       <div class="lib-grid">${items.map((it) => `<button class="lib-card" data-id="${esc(it.id)}">
           <img src="${libThumb(it.cover)}" alt="" loading="lazy">
-          <div class="lib-cap"><b>№ ${esc(it.id)}</b> ${esc(it.code)}<div class="meta">фото: ${it.photos} · видео: ${it.videos}</div></div>
+          <div class="lib-cap"><b>№ ${esc(it.id)}</b> ${esc(libTitle(it))}<div class="meta">фото: ${it.photos} · видео: ${it.videos}${it.info?.price ? " · " + esc(it.info.price) : ""}</div></div>
         </button>`).join("") || `<p class="meta">Ничего не нашлось</p>`}</div>`;
     $("[data-close]", dlg).onclick = close;
     const qi = $("#libQ", dlg);
@@ -819,9 +825,17 @@ async function openLibrary() {
     const p = S.product;
     const have = new Set([...p.photos.map((x) => x.source), p.video?.source].filter(Boolean));
     const sel = new Set(it.files.filter((f) => f.kind === "photo" && !have.has(f.path)).map((f) => f.path));
+    let fill = !!it.info;
     const draw = () => {
+      const info = it.info, shown = info ? [["Артикул", info.article], ...INFO_FIELDS.slice(0, 5).map((k) => [FIELD_RU[k], info[k]])].filter(([, v]) => v) : [];
+      const card = it.info_error ? `<p class="lib-info err">Не удалось прочитать данные изделия: ${esc(it.info_error)}</p>`
+        : !info ? `<p class="lib-info meta">В папке нет <code>product.json</code> — карточку заполнишь вручную.</p>`
+        : `<label class="lib-info"><input type="checkbox" data-fill ${fill ? "checked" : ""}>
+            <span><b>Заполнить карточку из <code>product.json</code></b>${shown.length ? "<br>" + shown.map(([k, v]) => `${k}: ${esc(v)}`).join(" · ") : "<br><span class='meta'>файл пока пустой</span>"}</span></label>`;
+      const can = sel.size || (fill && info);
       dlg.innerHTML = `<div class="dlg-head"><button class="btn ghost" data-back>← Все изделия</button>
-          <h2>№ ${esc(it.id)} ${esc(it.code)}</h2><button class="btn ghost" data-close>Закрыть</button></div>
+          <h2>№ ${esc(it.id)} ${esc(libTitle(it))}</h2><button class="btn ghost" data-close>Закрыть</button></div>
+        ${card}
         <p class="hint">Отметь файлы для изделия. Видео можно взять одно — оно обрежется до 5 секунд, как при ручной загрузке.</p>
         <div class="lib-grid">${it.files.map((f) => {
           const added = have.has(f.path);
@@ -831,9 +845,11 @@ async function openLibrary() {
             <div class="lib-cap">${f.kind === "video" ? "видео" : "фото"}${f.label ? " · " + esc(f.label) : ""}
               <div class="meta">${added ? "уже добавлено" : (f.size / 1048576).toFixed(1) + " МБ"}</div></div></label>`;
         }).join("")}</div>
-        <div class="row dlg-foot"><button class="btn primary" data-add ${sel.size ? "" : "disabled"}>Добавить выбранные (${sel.size})</button></div>`;
+        <div class="row dlg-foot"><button class="btn primary" data-add ${can ? "" : "disabled"}>${sel.size ? `Добавить выбранные (${sel.size})` : "Добавить"}${fill && info ? " и заполнить карточку" : ""}</button></div>`;
       $("[data-close]", dlg).onclick = close;
       $("[data-back]", dlg).onclick = grid;
+      const fc = $("[data-fill]", dlg);
+      if (fc) fc.onchange = () => { fill = fc.checked; draw(); };
       dlg.querySelectorAll("input[data-f]").forEach((c) => (c.onchange = () => {
         const f = it.files.find((x) => x.path === c.dataset.f);
         if (c.checked) {
@@ -842,25 +858,31 @@ async function openLibrary() {
         } else sel.delete(f.path);
         draw();
       }));
-      $("[data-add]", dlg).onclick = () => addFromLibrary(it, [...sel], close);
+      $("[data-add]", dlg).onclick = () => addFromLibrary(it, [...sel], fill && it.info, close);
     };
     draw();
   };
   grid();
 }
-async function addFromLibrary(it, files, close) {
+async function addFromLibrary(it, files, info, close) {
   const p = S.product;
   close();
+  const errors = [];
   let n = 0;
   for (const f of files) {
     toast(`Добавляю ${++n} из ${files.length}…`);
     try { await api(`/api/products/${p.id}/fromlibrary`, { body: { file: f } }); }
-    catch (e) { toast(e.message, true); }
+    catch (e) { errors.push(`${f.split("/").pop()}: ${e.message}`); }
   }
-  // новое изделие без названия получает артикул из библиотеки
-  if (it.code && (!p.name || p.name === "Новое кольцо"))
-    await guard(() => api(`/api/products/${p.id}/update`, { body: { name: it.code } }));
-  await loadProduct(p.id); await loadState(); render(); toast("Файлы из библиотеки добавлены");
+  // карточка из product.json папки: непустые поля заменяют текущие; без названия — артикул
+  const upd = {};
+  if (info) INFO_FIELDS.forEach((k) => info[k] && (upd[k] = info[k]));
+  if (!upd.name && it.info?.article && (!p.name || p.name === "Новое кольцо")) upd.name = it.info.article;
+  if (Object.keys(upd).length) await guard(() => api(`/api/products/${p.id}/update`, { body: upd }));
+  await loadProduct(p.id); await loadState(); render();
+  const what = [files.length - errors.length && `файлов: ${files.length - errors.length}`, info && "карточка заполнена"].filter(Boolean).join(", ");
+  if (errors.length) toast(`Не добавлено ${errors.length} из ${files.length}. ${errors.join("; ")}`, true);
+  else toast(what ? `Из библиотеки: ${what}` : "Готово");
 }
 
 // ---------------------------------------------------------------- задачи
