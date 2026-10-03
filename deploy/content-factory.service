@@ -1,0 +1,19 @@
+# /etc/systemd/system/content-factory.service
+# Поменяй User и пути под свой сервер, затем:
+#   sudo systemctl daemon-reload && sudo systemctl enable --now content-factory
+[Unit]
+Description=Content factory (jewelry reels)
+After=network-online.target
+
+[Service]
+Type=simple
+User=factory
+WorkingDirectory=/home/factory/content-factory
+ExecStart=/home/factory/content-factory/deploy/start.sh
+Restart=on-failure
+RestartSec=5
+# Токен подписки Claude можно держать здесь вместо .env:
+# Environment=CF_CLAUDE_CODE_OAUTH_TOKEN=...
+
+[Install]
+WantedBy=multi-user.target

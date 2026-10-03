@@ -1,0 +1,17 @@
+# секреты и окружение
+.env
+.venv/
+__pycache__/
+*.pyc
+.DS_Store
+
+# рабочие данные завода: изделия, ролики, оценки, ресёрч, журналы
+data/*
+!data/music/
+data/music/*
+!data/music/.gitkeep
+
+# служебное
+_backup/
+*.tgz
+*.zip
