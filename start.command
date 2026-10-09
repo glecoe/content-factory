@@ -38,4 +38,10 @@ source .venv/bin/activate
 python -m pip install -q --upgrade pip >/dev/null 2>&1
 python -m pip install -q -r requirements.txt || echo "  ⚠  Не все пакеты установились — проверь интернет. Демо-режим всё равно заработает."
 
+# браузер для скриншотов лаборатории сайтов (один раз, ~150 МБ)
+if [ ! -f .venv/.pw_chromium ] && python -c "import playwright" 2>/dev/null; then
+  echo "  Ставлю браузер для скриншотов сайтов (один раз, 1–3 минуты)…"
+  python -m playwright install chromium && touch .venv/.pw_chromium || echo "  ⚠  Браузер не поставился — лаборатория будет работать без скриншотов."
+fi
+
 python app/server.py

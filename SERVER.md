@@ -6,6 +6,7 @@
 
 ```
 sudo apt update && sudo apt install -y python3 python3-venv ffmpeg
+# браузер для скриншотов лаборатории сайтов ставит deploy/start.sh (playwright install --with-deps chromium)
 curl -fsSL https://claude.ai/install.sh | bash        # Claude Code
 ```
 

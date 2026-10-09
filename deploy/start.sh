@@ -7,4 +7,7 @@ unset ANTHROPIC_API_KEY
 if [ ! -d .venv ]; then python3 -m venv .venv; fi
 . .venv/bin/activate
 python -m pip install -q -r requirements.txt
+if [ ! -f .venv/.pw_chromium ]; then
+  python -m playwright install --with-deps chromium && touch .venv/.pw_chromium || echo "Playwright browser not installed"
+fi
 exec python app/server.py

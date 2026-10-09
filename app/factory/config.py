@@ -10,9 +10,10 @@ PRODUCTS = DATA / "products"
 MUSIC = DATA / "music"
 RESEARCH = DATA / "research"
 LIBRARY = ROOT / "library"                          # библиотека съёмки «По изделиям» (в git через LFS)
+SITES = DATA / "sites"
 ENV_FILE = ROOT / ".env"
 
-for p in (DATA, PRODUCTS, MUSIC, RESEARCH, RESEARCH / "refs", RESEARCH / "briefs"):
+for p in (DATA, PRODUCTS, MUSIC, RESEARCH, RESEARCH / "refs", RESEARCH / "briefs", SITES):
     p.mkdir(parents=True, exist_ok=True)
 
 # Роли «мозгов» и провайдер по умолчанию. claude = подписка через Claude Code (OAuth), gemini = Gemini API.
@@ -23,6 +24,11 @@ ROLES = {
     "taste": ("Куратор вкуса", "claude"),
     "publish": ("Тексты публикаций", "claude"),
     "passport": ("Паспорт изделия по фото", "gemini"),
+    # Лаборатория сайтов
+    "site_brand": ("Сайты · бренд-кит", "claude"),
+    "site_research": ("Сайты · ресёрч", "claude"),
+    "site_strategy": ("Сайты · стратег и превью", "claude"),
+    "site_prompt": ("Сайты · автор промтов", "claude"),
 }
 
 DEFAULTS = {
@@ -44,6 +50,12 @@ DEFAULTS = {
     "MONTAGE_FIT": "crop",       # crop = обрезать под 9:16, blur = вписать на размытый фон
     "APIFY_TOKEN": "",
     "LIBRARY_DIR": "",           # своя папка библиотеки; пусто = library/ в проекте
+    # Лаборатория сайтов
+    "SITE_SHOTS": "1",           # 1 = делать скриншоты сайтов-референсов (нужен Playwright)
+    "SITE_BUILD_TURNS": "150",   # шагов Claude Code на одну сессию сборки
+    "SITE_BUILD_MINUTES": "45",  # минут на одну сессию сборки; потом — автоматическое продолжение
+    "SITE_BUILD_RESUMES": "3",   # сколько раз продолжать прерванную сборку автоматически
+    "SITE_BUILD_MODEL": "sonnet",  # модель для сборки кода: sonnet — быстрее, opus — тщательнее
     # Сервер
     "HOST": "127.0.0.1",
     "PORT": "8765",
@@ -137,6 +149,11 @@ def public_settings():
         "vertical_mode": s.get("VERTICAL_MODE", "nb2"),
         "montage_fit": s.get("MONTAGE_FIT", "crop"),
         "library_dir": s.get("LIBRARY_DIR", ""),
+        "site_shots": s.get("SITE_SHOTS", "1") == "1",
+        "site_build_turns": int_setting("SITE_BUILD_TURNS", 150),
+        "site_build_minutes": int_setting("SITE_BUILD_MINUTES", 45),
+        "site_build_resumes": int_setting("SITE_BUILD_RESUMES", 3),
+        "site_build_model": s.get("SITE_BUILD_MODEL", "sonnet"),
         "host": s.get("HOST"), "port": s.get("PORT"), "auth_user": s.get("AUTH_USER"),
     }
 

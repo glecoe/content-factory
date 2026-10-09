@@ -18,7 +18,7 @@ from urllib.parse import urlparse, parse_qs, unquote
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from factory import config, store, pipeline, jobs, media, montage, brains, research, gen, library  # noqa: E402
+from factory import config, store, pipeline, jobs, media, montage, brains, research, gen, library, sitelab, niches  # noqa: E402
 from factory.config import DATA, APP, MODELS  # noqa: E402
 
 STATIC = APP / "static"
@@ -73,7 +73,7 @@ class Handler(BaseHTTPRequestHandler):
         b = self._body()
         return json.loads(b.decode("utf-8")) if b else {}
 
-    def _file(self, path: Path):
+    def _file(self, path: Path, sandbox=False, download_name=None):
         if not path.exists() or not path.is_file():
             return self._err("not found", 404)
         size = path.stat().st_size
@@ -97,6 +97,10 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Accept-Ranges", "bytes")
         self.send_header("Content-Length", str(end - start + 1))
         self.send_header("Cache-Control", "no-cache")
+        if sandbox:   # сгенерированные сайты: отдельный «источник», к админке доступа нет
+            self.send_header("Content-Security-Policy", "sandbox allow-scripts allow-forms allow-popups allow-modals")
+        if download_name:
+            self.send_header("Content-Disposition", f'attachment; filename="{download_name}"')
         self.end_headers()
         with open(path, "rb") as fh:
             fh.seek(start)
@@ -116,7 +120,7 @@ class Handler(BaseHTTPRequestHandler):
         if not self._authorized():
             return self._deny()
         u = urlparse(self.path)
-        path = unquote(u.path)
+        path, qs = unquote(u.path), parse_qs(u.query)
         try:
             if path in ("/", "/index.html"):
                 return self._file(STATIC / "index.html")
@@ -129,26 +133,53 @@ class Handler(BaseHTTPRequestHandler):
                 f = (DATA / path[len("/files/"):]).resolve()
                 if DATA.resolve() not in f.parents:
                     return self._err("forbidden", 403)
-                return self._file(f)
+                sb = path.startswith("/files/sites/") and f.suffix.lower() in (".html", ".htm", ".svg", ".js")
+                return self._file(f, sandbox=sb)
+            if path == "/api/sites":
+                lab = sitelab.resolve_lab(qs.get("lab", [""])[0])
+                return self._json({"lab": sitelab.load_lab(lab), "labs": sitelab.list_labs(),
+                                   "projects": sitelab.list_projects(lab), "taste": sitelab.taste_text(lab),
+                                   "ratings": len(sitelab.ratings(lab)), "stacks": list(sitelab.STACKS)})
+            if path == "/api/labs":
+                return self._json({"labs": sitelab.list_labs()})
+            if path == "/api/niches":
+                return self._json({"niches": niches.list_niches(), "fields": niches.FIELDS})
+            m = re.fullmatch(r"/api/niches/([\w\-]+)", path)
+            if m:
+                return self._json(niches.load(m.group(1)))
+            m = re.fullmatch(r"/api/sites/([\w\-]+)", path)
+            if m:
+                return self._json(sitelab.load(m.group(1)))
+            m = re.fullmatch(r"/api/sites/([\w\-]+)/prompt", path)
+            if m:
+                return self._json({"text": sitelab.read_prompt_file(m.group(1), qs.get("file", ["MASTER.md"])[0])})
+            m = re.fullmatch(r"/api/sites/([\w\-]+)/download", path)
+            if m:
+                z = sitelab.make_zip(m.group(1), qs.get("what", ["prompts"])[0])
+                return self._file(z, download_name=z.name)
             if path == "/api/state":
+                nid = niches.resolve(qs.get("niche", [""])[0])
                 return self._json({
                     "settings": config.public_settings(), "tools": media.check_tools(),
-                    "models": MODELS, "hero_styles": {k: v[0] for k, v in gen.HERO_STYLES.items()}, "products": store.list_products(), "costs": store.costs_summary(),
-                    "taste": store.taste_text(), "music": montage.music_tracks(),
-                    "ratings": len(store.ratings()), "jobs": jobs.active(), "brains": brains.status(),
-                    "research": {"active": research.active_id(), "briefs": len(research.list_briefs())}})
+                    "models": MODELS, "hero_styles": {k: v[0] for k, v in gen.HERO_STYLES.items()},
+                    "niche": niches.load(nid), "niches": niches.list_niches(), "labs": sitelab.list_labs(),
+                    "products": store.list_products(nid), "costs": store.costs_summary(),
+                    "taste": store.taste_text(nid), "music": montage.music_tracks(),
+                    "ratings": len(store.ratings(nid)), "jobs": jobs.active(), "brains": brains.status(),
+                    "research": {"active": research.active_id(nid), "briefs": len(research.list_briefs(nid))}})
             if path == "/api/library":
                 return self._json(library.list_items())
             if path == "/library/thumb":
                 return self._file(library.thumb(parse_qs(u.query).get("f", [""])[0]))
             if path == "/api/research":
-                bid = research.active_id()
-                return self._json({"config": research.load_config(), "briefs": research.list_briefs(), "active": bid,
-                                   "brief": research.load_brief(bid) if bid else None,
-                                   "breakdowns": research.all_breakdowns(), "refs": research.list_refs()})
+                nid = niches.resolve(qs.get("niche", [""])[0])
+                bid = research.active_id(nid)
+                return self._json({"niche": nid, "config": research.load_config(nid), "briefs": research.list_briefs(nid),
+                                   "active": bid, "brief": research.load_brief(nid, bid) if bid else None,
+                                   "breakdowns": research.all_breakdowns(nid), "refs": research.list_refs(nid)})
             m = re.fullmatch(r"/api/research/brief/([\w\-]+)", path)
             if m:
-                return self._json(research.load_brief(m.group(1)))
+                return self._json(research.load_brief(qs.get("niche", [""])[0] or None, m.group(1)))
             m = re.fullmatch(r"/api/products/([\w\-]+)", path)
             if m:
                 return self._json(store.load_product(m.group(1)))
@@ -195,32 +226,71 @@ class Handler(BaseHTTPRequestHandler):
                     job.say(f"Ответ: {txt} · {meta['seconds']} с")
                     return {"answer": txt}
                 return self._json(jobs.start("Проверка Claude", test).to_dict())
+            nid = niches.resolve(qs.get("niche", [""])[0])
             if path == "/api/research/config":
-                return self._json(research.save_config(self._jbody()))
+                return self._json(research.save_config(nid, self._jbody()))
             if path == "/api/research/run":
-                return self._json(jobs.start("Ресёрч трендов", research.run).to_dict())
+                return self._json(jobs.start(f"Ресёрч · {niches.load(nid)['name']}", research.run, nid).to_dict())
             if path == "/api/research/activate":
-                research.set_active(self._jbody().get("id", ""))
+                research.set_active(nid, self._jbody().get("id", ""))
                 return self._json({"ok": True})
             if path == "/api/research/upload":
                 name = qs.get("name", ["ref.mp4"])[0]
-                return self._json({"file": research.add_ref(name, self._body())})
+                return self._json({"file": research.add_ref(nid, name, self._body())})
             if path == "/api/research/analyze":
                 b = self._jbody()
-                return self._json(jobs.start("Разбор ролика", research.analyze_one, b.get("ref", ""),
+                return self._json(jobs.start("Разбор ролика", research.analyze_one, nid, b.get("ref", ""),
                                              b.get("kind", "url")).to_dict())
             if path == "/api/research/deleteref":
-                research.delete_ref(self._jbody().get("name", ""))
+                research.delete_ref(nid, self._jbody().get("name", ""))
                 return self._json({"ok": True})
             if path == "/api/products":
-                return self._json(store.create_product(self._jbody()))
+                b = self._jbody()
+                return self._json(store.create_product({**b, "niche": b.get("niche") or nid}))
+            # ниши завода
+            if path == "/api/niches":
+                return self._json(niches.create(self._jbody()))
+            m = re.fullmatch(r"/api/niches/([\w\-]+)/(\w+)", path)
+            if m:
+                n_id, act = m.group(1), m.group(2)
+                if act == "update":
+                    return self._json(niches.update(n_id, self._jbody()))
+                if act == "fill":
+                    return self._json(jobs.start("Контекст ниши", niches.run_fill, n_id).to_dict())
+                if act == "archive":
+                    niches.archive(n_id)
+                    return self._json({"ok": True})
+                return self._err("unknown action", 404)
+            # направления лаборатории
+            lab = qs.get("lab", [""])[0] or None
+            if path == "/api/labs":
+                return self._json(sitelab.create_lab(self._jbody()))
+            m = re.fullmatch(r"/api/labs/([\w\-]+)/(\w+)", path)
+            if m:
+                if m.group(2) == "update":
+                    return self._json(sitelab.update_lab(m.group(1), self._jbody()))
+                if m.group(2) == "archive":
+                    sitelab.archive_lab(m.group(1))
+                    return self._json({"ok": True})
+                return self._err("unknown action", 404)
+            if path == "/api/sites":
+                b = self._jbody()
+                return self._json(sitelab.create({**b, "lab": b.get("lab") or lab}))
+            if path == "/api/sites/taste":
+                sitelab.save_taste(self._jbody().get("text", ""), lab)
+                return self._json({"ok": True})
+            if path == "/api/sites/taste/update":
+                return self._json(jobs.start("Вкус направления", sitelab.run_taste, lab).to_dict())
+            m = re.fullmatch(r"/api/sites/([\w\-]+)/(\w+)", path)
+            if m:
+                return self._site_action(m.group(1), m.group(2), qs)
             m = re.fullmatch(r"/api/products/([\w\-]+)/(\w+)", path)
             if not m:
                 if path == "/api/taste":
-                    store.save_taste(self._jbody().get("text", ""))
+                    store.save_taste(self._jbody().get("text", ""), nid)
                     return self._json({"ok": True})
                 if path == "/api/taste/update":
-                    return self._json(jobs.start("Профиль вкуса", pipeline.run_taste).to_dict())
+                    return self._json(jobs.start(f"Вкус · {niches.load(nid)['name']}", pipeline.run_taste, nid).to_dict())
                 return self._err("not found", 404)
             pid, action = m.group(1), m.group(2)
             if action == "update":
@@ -291,6 +361,76 @@ class Handler(BaseHTTPRequestHandler):
             return self._err("unknown action", 404)
         except Exception as e:
             return self._err(e, 400)
+
+
+def _site_action(self, sid, action, qs):
+    S = sitelab
+    J = lambda title, fn, *a: self._json(jobs.start(title, fn, sid, *a).to_dict())  # noqa: E731
+    if action == "brief":
+        return self._json(S.update_brief(sid, self._jbody()))
+    if action == "logo":
+        return self._json(S.add_logo(sid, qs.get("name", ["logo.png"])[0], self._body()))
+    if action == "logoremove":
+        return self._json(S.remove_logo(sid))
+    if action == "brand":
+        return J("Бренд-кит", S.run_brand)
+    if action == "brandsave":
+        return self._json(S.save_brand(sid, self._jbody()))
+    if action == "research":
+        return J("Ресёрч сайтов", S.run_research)
+    if action == "auto":
+        return J("Бренд → ресёрч → концепции", S.run_to_concepts)
+    if action == "concepts":
+        return J("Концепции сайта", S.run_concepts, int(self._jbody().get("n", 3)))
+    if action == "preview":
+        return J("Превью концепции", S.make_previews, int(self._jbody().get("idx", 0)))
+    if action == "choose":
+        b = self._jbody()
+        return self._json(S.choose(sid, int(b.get("idx", 0)), b.get("feedback", "")))
+    if action == "photoplan":
+        return J("План фото", S.run_photo_plan)
+    if action == "photogen":
+        return J("Генерация фото", S.run_generate_photos, self._jbody().get("slots") or None)
+    if action == "photoupload":
+        return self._json(S.add_photo_upload(sid, qs.get("name", ["photo.jpg"])[0], self._body(), qs.get("slot", [""])[0]))
+    if action == "photoassign":
+        return J("Разложить мои фото", S.run_assign, bool(self._jbody().get("auto_enhance", False)))
+    if action == "photoenhance":
+        b = self._jbody()
+        return J("Улучшение фото", S.run_enhance, b.get("slot", ""), b.get("file", ""), b.get("mode", "retouch"), b.get("extra", ""))
+    if action == "photochoose":
+        b = self._jbody()
+        return self._json(S.choose_photo(sid, b.get("slot", ""), b.get("file")))
+    if action == "photoslot":
+        b = self._jbody()
+        return self._json(S.save_slot(sid, b.get("slot", ""), b))
+    if action == "photouse":
+        b = self._jbody()
+        return self._json(S.assign_upload(sid, b.get("file", ""), b.get("slot", "")))
+    if action == "prompts":
+        return J("Пакет промтов", S.run_prompts)
+    if action == "promptsave":
+        b = self._jbody()
+        S.write_prompt_file(sid, b.get("file", ""), b.get("text", ""))
+        return self._json({"ok": True})
+    if action == "build":
+        return J("Сборка сайта", S.run_build, self._jbody().get("extra", ""))
+    if action == "resume":
+        b = self._jbody()
+        return J("Продолжение сборки", S.run_resume, b.get("dir", ""), b.get("extra", ""))
+    if action == "review":
+        return J("Проверка сайта", S.run_review, self._jbody().get("dir", ""))
+    if action == "fix":
+        b = self._jbody()
+        return J("Правки сайта", S.run_fix, b.get("dir", ""), b.get("extra", ""), bool(b.get("use_review", True)))
+    if action == "rate":
+        b = self._jbody()
+        S.rate(sid, b.get("what", "concept"), b.get("ref"), bool(b.get("like")), b.get("comment", ""))
+        return self._json(S.load(sid))
+    return self._err("unknown action", 404)
+
+
+Handler._site_action = _site_action
 
 
 def main():

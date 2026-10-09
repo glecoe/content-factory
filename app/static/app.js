@@ -1,7 +1,10 @@
 // Контент-завод · интерфейс. Без сборки и фреймворков.
 const $ = (s, el = document) => el.querySelector(s);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-const S = { state: null, product: null, page: "welcome", tab: "item", selected: new Set(), jobs: {}, research: null };
+const S = { state: null, product: null, page: "home", tab: "item", selected: new Set(), jobs: {}, research: null,
+  mode: "factory", niche: "", lab: "", sites: null, site: null };
+const nq = () => (S.niche ? `niche=${encodeURIComponent(S.niche)}` : "");
+const lq = () => (S.lab ? `lab=${encodeURIComponent(S.lab)}` : "");
 const TAGS = ["свет", "темп", "хук", "модель", "рука", "кольцо не то", "музыка", "плашка", "скучно", "дорого выглядит", "тренд зашёл"];
 const TYPE_NAMES = { A: "макро", B: "на руке", C: "ИИ-модель", D: "атмосфера" };
 
@@ -34,78 +37,19 @@ async function copy(text) { try { await navigator.clipboard.writeText(text); toa
 async function guard(fn) { try { await fn(); } catch (e) { toast(e.message, true); } }
 
 // ---------------------------------------------------------------- загрузка
-async function loadState() { S.state = await api("/api/state"); renderRail(); }
+async function loadState() {
+  S.state = await api(`/api/state?${nq()}`);
+  S.niche = S.state.niche.id; renderRail();
+}
 async function loadProduct(id) { S.product = await api(`/api/products/${id}`); }
-async function loadResearch() { S.research = await api("/api/research"); }
+async function loadResearch() { S.research = await api(`/api/research?${nq()}`); }
 async function refresh() {
   await loadState();
   if (S.product) await loadProduct(S.product.id);
   if (S.page === "research") await loadResearch();
+  if (S.mode === "lab") await loadSites();
+  if (S.page === "site" && S.site) await loadSite(S.site.id);
   render();
-}
-
-// ---------------------------------------------------------------- боковая панель
-function renderRail() {
-  const st = S.state.settings;
-  const m = $("#mode");
-  m.className = "mode" + (st.demo_mode ? "" : " live");
-  m.innerHTML = (st.demo_mode
-    ? `<b>Демо-режим</b><br>Клипы собираются из фото, бесплатно`
-    : `<b>Боевой режим · fal.ai</b><br>Сегодня ${usd(S.state.costs.today)} из ${usd(st.daily_limit_usd)}`) +
-    `<div class="brains"><span class="dot ${claudeOK() ? "on" : ""}"></span>Claude ${claudeOK() ? "по подписке" : "не подключён"}
-     <br><span class="dot ${geminiOK() ? "on" : ""}"></span>Gemini ${geminiOK() ? "подключён" : "нет ключа"}</div>`;
-  const list = $("#products");
-  list.innerHTML = S.state.products.length ? "" : `<div class="empty-rail">Изделий пока нет</div>`;
-  for (const p of S.state.products) {
-    const b = document.createElement("button");
-    b.className = S.page === "product" && S.product?.id === p.id ? "on" : "";
-    b.innerHTML = `<div class="p-name">${esc(p.name || "Без названия")}</div><div class="p-meta">клипов: ${p.clips} · роликов: ${p.videos}</div>`;
-    b.onclick = async () => { await loadProduct(p.id); S.page = "product"; S.tab = S.tab || "item"; S.selected.clear(); render(); };
-    list.appendChild(b);
-  }
-  document.querySelectorAll(".railnav button").forEach((b) => b.classList.toggle("on", S.page === b.dataset.page));
-}
-document.querySelectorAll(".railnav button").forEach((b) => (b.onclick = async () => {
-  S.page = b.dataset.page;
-  if (S.page === "research") await guard(loadResearch);
-  render();
-}));
-$("#newProduct").onclick = async () => {
-  const p = await api("/api/products", { body: { name: "Новое кольцо" } });
-  await loadState(); await loadProduct(p.id); S.page = "product"; S.tab = "item"; render();
-};
-
-// ---------------------------------------------------------------- роутинг
-function render() {
-  renderRail();
-  const v = $("#view"), top = $("#top");
-  if (S.page === "product" && S.product) return renderProduct(v, top);
-  if (S.page === "research") return renderResearch(v, top);
-  if (S.page === "taste") return renderTaste(v, top);
-  if (S.page === "costs") return renderCosts(v, top);
-  if (S.page === "settings") return renderSettings(v, top);
-  return renderWelcome(v, top);
-}
-
-function renderWelcome(v, top) {
-  top.innerHTML = "";
-  const st = S.state.settings, tools = S.state.tools, cl = S.state.brains.claude;
-  const ok = (b) => `<span class="tick ${b ? "on" : ""}">${b ? "✓" : "•"}</span>`;
-  v.innerHTML = `<div class="welcome">
-    <h1>Кольцо на входе — ролики на выходе</h1>
-    <p class="meta">Цепочка завода: ресёрч трендов → изделие → сценарист → кадры с контролем качества → монтаж → тексты публикаций → твоя оценка → профиль вкуса.</p>
-    <ul class="check">
-      <li>${ok(tools.ffmpeg)} ${tools.ffmpeg ? "FFmpeg найден" : "<b>Установи FFmpeg</b>: <code>brew install ffmpeg</code>"}</li>
-      <li>${ok(cl.logged_in)} ${cl.logged_in ? `Claude по подписке подключён (${esc(cl.method || "OAuth")}) — сценарист, ресёрчер, монтажёр, тексты`
-        : cl.installed ? "Claude Code установлен, но вход не выполнен: открой Терминал и набери <code>claude</code>, войди своим аккаунтом"
-        : "Claude Code не установлен: в Терминале <code>curl -fsSL https://claude.ai/install.sh | bash</code>, потом <code>claude</code> для входа"}</li>
-      <li>${ok(st.gemini_key_set)} ${st.gemini_key_set ? "Gemini подключён — паспорт по фото, контроль кадров, разбор роликов" : "Вставь ключ Gemini в «Настройках» — он смотрит видео и проверяет кадры"}</li>
-      <li>${ok(st.fal_key_set)} ${st.fal_key_set ? "fal.ai подключён" : "Ключ fal.ai можно добавить позже: пока работает демо-режим"}</li>
-      <li>${ok(S.state.research.active)} ${S.state.research.active ? `Бриф трендов активен: ${esc(S.state.research.active)}` : "Запусти ресёрч на странице «Тренды недели» — сценарист будет опираться на свежие тренды"}</li>
-      <li>${ok(S.state.music.length)} ${S.state.music.length ? `Музыка: ${S.state.music.length} трек(ов)` : "Положи 2–3 трека в папку <code>data/music</code>"}</li>
-    </ul>
-    <button class="btn primary" onclick="document.getElementById('newProduct').click()">Добавить изделие</button>
-  </div>`;
 }
 
 // ---------------------------------------------------------------- изделие
@@ -613,9 +557,9 @@ function renderResearch(v, top) {
   const R = S.research;
   if (!R) { v.innerHTML = `<div class="panel">Загружаю…</div>`; loadResearch().then(render); return; }
   const c = R.config, B = R.brief?.brief;
-  top.innerHTML = `<div><h1>Тренды недели</h1><div class="sub">Ресёрчер (${who("research")}) ищет в интернете, Gemini смотрит ролики-референсы, итог — бриф для сценариста.</div></div>
+  top.innerHTML = `<div><div class="crumb">${esc(S.state.niche.name)}</div><h1>Тренды ниши</h1><div class="sub">Ресёрчер (${who("research")}) ищет в интернете, Gemini смотрит ролики-референсы, итог — бриф для сценариста.</div></div>
     <button class="btn dark" id="runR" ${brainOK() ? "" : "disabled"}>Запустить ресёрч</button>`;
-  $("#runR").onclick = async () => guard(async () => startJob(await api("/api/research/run", { body: {} })));
+  $("#runR").onclick = async () => guard(async () => startJob(await api(`/api/research/run?${nq()}`, { body: {} })));
   const list = (arr) => (arr || []).length ? `<ul>${arr.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>` : `<p class="meta">—</p>`;
   const briefHtml = B ? `
     <p class="lead">${esc(B.summary_ru)}</p>
@@ -635,7 +579,7 @@ function renderResearch(v, top) {
     <button class="btn sm" id="actB">Сделать активным</button>` : ""}</div>${briefHtml}</div>
 
   <div class="panel"><h2>Что ищем</h2>
-    <p class="hint">Это задание для ресёрчера. Конкурентов и ключевые слова лучше уточнить под своего производителя.</p>
+    <p class="hint">Задание для ресёрчера этой ниши. Конкурентов и ключевые слова уточни под своего производителя — у каждой ниши своё задание и свои брифы.</p>
     <div class="grid2">
       <div class="field"><label>Ниша</label><textarea id="r_niche">${esc(c.niche)}</textarea></div>
       <div class="field"><label>Аудитория</label><textarea id="r_aud">${esc(c.audience)}</textarea></div>
@@ -661,32 +605,32 @@ function renderResearch(v, top) {
       ${(b.ideas_for_us || []).length ? `<p><span class="meta">Взять нам:</span> ${b.ideas_for_us.map(esc).join("; ")}</p>` : ""}
       <p class="meta">${esc(String(b.ref || "").slice(0, 80))}</p></div>`).join("")}</div>` : ""}
   </div>`;
-  if ($("#actB")) $("#actB").onclick = async () => guard(async () => { await api("/api/research/activate", { body: { id: $("#briefSel").value } }); await refresh(); toast("Бриф активен"); });
+  if ($("#actB")) $("#actB").onclick = async () => guard(async () => { await api(`/api/research/activate?${nq()}`, { body: { id: $("#briefSel").value } }); await refresh(); toast("Бриф активен"); });
   $("#saveR").onclick = async () => guard(async () => {
-    await api("/api/research/config", { body: { niche: $("#r_niche").value, audience: $("#r_aud").value, markets: $("#r_mk").value,
+    await api(`/api/research/config?${nq()}`, { body: { niche: $("#r_niche").value, audience: $("#r_aud").value, markets: $("#r_mk").value,
       platforms: $("#r_pl").value, competitors: $("#r_comp").value, keywords: $("#r_kw").value, reference_links: $("#r_links").value,
       apify_tasks: $("#r_apify").value } });
     await loadResearch(); toast("Задание сохранено"); render();
   });
   const drop = $("#rdrop"), inp = $("#rIn");
-  const up = async (files) => { for (const f of files) { toast(`Загружаю ${f.name}…`); await guard(() => api(`/api/research/upload?name=${encodeURIComponent(f.name)}`, { raw: f })); } await loadResearch(); render(); };
+  const up = async (files) => { for (const f of files) { toast(`Загружаю ${f.name}…`); await guard(() => api(`/api/research/upload?${nq()}&name=${encodeURIComponent(f.name)}`, { raw: f })); } await loadResearch(); render(); };
   drop.onclick = () => inp.click(); inp.onchange = () => up([...inp.files]);
   drop.ondragover = (e) => { e.preventDefault(); drop.classList.add("over"); };
   drop.ondragleave = () => drop.classList.remove("over");
   drop.ondrop = (e) => { e.preventDefault(); drop.classList.remove("over"); up([...e.dataTransfer.files]); };
-  v.querySelectorAll("[data-an]").forEach((b) => (b.onclick = async () => guard(async () => startJob(await api("/api/research/analyze", { body: { ref: b.dataset.an, kind: "file" } })))));
-  v.querySelectorAll("[data-del]").forEach((b) => (b.onclick = async () => { if (!confirm("Удалить референс?")) return; await api("/api/research/deleteref", { body: { name: b.dataset.del } }); await loadResearch(); render(); }));
+  v.querySelectorAll("[data-an]").forEach((b) => (b.onclick = async () => guard(async () => startJob(await api(`/api/research/analyze?${nq()}`, { body: { ref: b.dataset.an, kind: "file" } })))));
+  v.querySelectorAll("[data-del]").forEach((b) => (b.onclick = async () => { if (!confirm("Удалить референс?")) return; await api(`/api/research/deleteref?${nq()}`, { body: { name: b.dataset.del } }); await loadResearch(); render(); }));
 }
 
 // ---------------------------------------------------------------- вкус / расходы / настройки
 function renderTaste(v, top) {
-  top.innerHTML = `<div><h1>Профиль вкуса</h1><div class="sub">Оценок: ${S.state.ratings}. Профиль получают сценарист, монтажёр и ресёрчер.</div></div>`;
+  top.innerHTML = `<div><div class="crumb">${esc(S.state.niche.name)}</div><h1>Вкус ниши</h1><div class="sub">Оценок в этой нише: ${S.state.ratings}. Профиль получают сценарист, монтажёр и ресёрчер — только этой ниши.</div></div>`;
   v.innerHTML = `<div class="panel"><div class="field"><label>Можно править руками — это прямая инструкция агентам</label>
     <textarea id="taste" style="min-height:320px">${esc(S.state.taste)}</textarea></div>
     <div class="row"><button class="btn primary" id="saveTaste">Сохранить</button>
     <button class="btn" id="updTaste">Обновить по оценкам · ${who("taste")}</button></div></div>`;
-  $("#saveTaste").onclick = async () => { await api("/api/taste", { body: { text: $("#taste").value } }); toast("Профиль сохранён"); loadState(); };
-  $("#updTaste").onclick = async () => guard(async () => startJob(await api("/api/taste/update", { body: {} })));
+  $("#saveTaste").onclick = async () => { await api(`/api/taste?${nq()}`, { body: { text: $("#taste").value } }); toast("Профиль сохранён"); loadState(); };
+  $("#updTaste").onclick = async () => guard(async () => startJob(await api(`/api/taste/update?${nq()}`, { body: {} })));
 }
 
 function renderCosts(v, top) {
@@ -701,83 +645,6 @@ function renderCosts(v, top) {
       <tr><td>Вертикальный старт 9:16 (Nano Banana 2, один раз на фото)</td><td colspan="3">$0.08 за фото · ${rub(0.08)}</td></tr></table></div>
     <div class="panel"><h2>Последние списания</h2>${c.last.length ? `<table><tr><th>Когда</th><th>Что</th><th>Сумма</th></tr>
       ${c.last.map((r) => `<tr><td>${new Date(r.ts * 1000).toLocaleString("ru-RU")}</td><td>${esc(r.detail)}</td><td>${usd(r.usd)}</td></tr>`).join("")}</table>` : `<p class="hint">Пока ничего не потрачено.</p>`}</div>`;
-}
-
-function renderSettings(v, top) {
-  const st = S.state.settings, tools = S.state.tools, cl = S.state.brains.claude;
-  const opt = (val, cur, label) => `<option value="${val}" ${String(cur) === String(val) ? "selected" : ""}>${label}</option>`;
-  top.innerHTML = `<div><h1>Настройки</h1><div class="sub">Ключи хранятся только в файле .env на этом компьютере или сервере.</div></div>`;
-  v.innerHTML = `
-  <div class="panel"><h2>Claude по подписке</h2>
-    <p class="hint">Завод вызывает Claude Code в фоне (<code>claude -p</code>) — тратится лимит твоей подписки, отдельный API-ключ не нужен.
-      На Mac: установи Claude Code и один раз войди. На сервере: на своём компьютере выполни <code>claude setup-token</code> и вставь токен сюда.</p>
-    <table class="kv">
-      <tr><td>Claude Code</td><td>${cl.installed ? `найден: ${esc(cl.version || "")} <span class="meta">${esc(cl.bin || "")}</span>` : `не найден — <code>curl -fsSL https://claude.ai/install.sh | bash</code>`}</td></tr>
-      <tr><td>Вход</td><td>${cl.logged_in ? `выполнен (${esc(cl.method || "")}${cl.email ? ", " + esc(cl.email) : ""})` : "не выполнен — в Терминале набери <code>claude</code> и войди аккаунтом с подпиской"}</td></tr></table>
-    <div class="grid2" style="margin-top:12px">
-      <div class="field"><label>Модель Claude</label><select id="s_cm">${opt("opus", st.claude_model, "Opus — лучшее качество")}${opt("sonnet", st.claude_model, "Sonnet — быстрее, меньше тратит лимит")}${opt("haiku", st.claude_model, "Haiku — самый экономный")}</select></div>
-      <div class="field"><label>Путь к claude (если не находится сам)</label><input type="text" id="s_cb" value="${esc(st.claude_bin || "")}" placeholder="~/.local/bin/claude"></div>
-    </div>
-    <div class="field"><label>Токен для сервера (CLAUDE_CODE_OAUTH_TOKEN) ${st.oauth_token_set ? "— сохранён; «-» чтобы стереть" : ""}</label><input type="password" autocomplete="new-password" id="s_tok" placeholder="${st.oauth_token_set ? "••••••••" : "необязательно на Mac"}"></div>
-    <div class="row"><button class="btn" id="testC" ${cl.installed ? "" : "disabled"}>Проверить Claude</button><button class="btn ghost" id="reC">Обновить статус</button></div>
-  </div>
-
-  <div class="panel"><h2>Кто какую работу делает</h2>
-    <p class="hint">Если выбранный «мозг» недоступен или упал по лимиту — задача автоматически уходит на второй.</p>
-    <table class="kv">${Object.entries(st.roles).map(([r, label]) => `<tr><td>${esc(label)}</td><td><select data-role="${r}">${opt("claude", st.providers[r], "Claude (подписка)")}${opt("gemini", st.providers[r], "Gemini API")}</select></td></tr>`).join("")}
-      <tr><td>Контролёр кадров, разбор видео</td><td class="meta">всегда Gemini (видит видео); без ключа — Claude по кадрам</td></tr></table>
-  </div>
-
-  <div class="panel"><h2>Ключи</h2>
-    <div class="field"><label>fal.ai API key ${st.fal_key_set ? "— сохранён, вставь новый, чтобы заменить" : ""}</label><input type="password" autocomplete="new-password" id="s_fal" placeholder="${st.fal_key_set ? "••••••••" : "вставь ключ из fal.ai/dashboard/keys"}"></div>
-    <div class="field"><label>Gemini API key ${st.gemini_key_set ? "— сохранён" : ""}</label><input type="password" autocomplete="new-password" id="s_gem" placeholder="${st.gemini_key_set ? "••••••••" : "вставь ключ из aistudio.google.com/apikey"}"></div>
-    <div class="field"><label>Apify token (по желанию, для сборщиков трендов) ${st.apify_set ? "— сохранён" : ""}</label><input type="password" autocomplete="new-password" id="s_apify" placeholder="${st.apify_set ? "••••••••" : "console.apify.com → Settings → Integrations"}"></div>
-    <div class="grid2"><div class="field"><label>Модель Gemini</label><input type="text" id="s_gm" value="${esc(st.gemini_model)}"></div>
-    <div class="field"><label>Дневной лимит трат fal.ai, $</label><input type="number" id="s_lim" min="0" step="1" value="${st.daily_limit_usd}"></div></div>
-    <label class="row" style="gap:8px;margin:6px 0 4px"><input type="checkbox" id="s_demo" ${st.demo_flag ? "checked" : ""}> Демо-режим: клипы собираются из фото через FFmpeg, fal.ai не вызывается</label>
-  </div>
-
-  <div class="panel"><h2>Конвейер</h2>
-    <div class="grid2">
-      <div class="field"><label>Концептов за один заход сценариста</label><input type="number" id="s_cn" min="1" max="8" value="${st.concepts_n}"></div>
-      <div class="field"><label>Сколько раз переделывать забракованный кадр</label><select id="s_ar">${[0, 1, 2].map((n) => opt(n, st.auto_retry, n === 0 ? "не переделывать" : n + " раз")).join("")}</select></div>
-      <div class="field"><label>Вертикаль для кадров из фото</label><select id="s_vm">${opt("nb2", st.vertical_mode, "Nano Banana 2 дорисовывает фон до 9:16 (+$0.08 за фото)")}${opt("blur", st.vertical_mode, "Фото на размытом фоне (бесплатно)")}${opt("off", st.vertical_mode, "Не менять (Kling отдаст квадрат)")}</select></div>
-      <div class="field"><label>Если клип не вертикальный, при монтаже</label><select id="s_mf">${opt("crop", st.montage_fit, "обрезать края")}${opt("blur", st.montage_fit, "вписать на размытый фон")}</select></div>
-    </div>
-  </div>
-
-  <div class="panel"><h2>Библиотека съёмки</h2>
-    <p class="hint">Фото и видео «По изделиям» лежат в папке <code>library/</code> проекта: внутри по папке на изделие. Из неё выбираются файлы на вкладке «Изделие». Новые съёмки клади туда же.</p>
-    <div class="field"><label>Другая папка библиотеки (необязательно; пусто — <code>library/</code> в проекте)</label><input type="text" id="s_lib" value="${esc(st.library_dir || "")}" placeholder="library"></div>
-  </div>
-
-  <div class="panel"><h2>Сервер</h2>
-    <p class="hint">Пока работаешь на Mac — не трогай. На сервере: HOST 0.0.0.0 и обязательно пароль (без пароля наружу не откроется). Применяется после перезапуска.</p>
-    <div class="grid2">
-      <div class="field"><label>HOST</label><input type="text" id="s_host" value="${esc(st.host)}"></div>
-      <div class="field"><label>PORT</label><input type="text" id="s_port" value="${esc(st.port)}"></div>
-      <div class="field"><label>Логин</label><input type="text" id="s_user" value="${esc(st.auth_user)}"></div>
-      <div class="field"><label>Пароль ${st.password_set ? "— задан; «-» чтобы снять" : ""}</label><input type="password" autocomplete="new-password" id="s_pw" placeholder="${st.password_set ? "••••••••" : "не задан"}"></div>
-    </div>
-  </div>
-  <div class="row" style="margin-bottom:16px"><button class="btn primary" id="saveS">Сохранить настройки</button></div>
-
-  <div class="panel"><h2>Проверка компьютера</h2><table>
-    <tr><td>FFmpeg</td><td>${tools.ffmpeg ? "найден" : "не найден — <code>brew install ffmpeg</code>"}</td></tr>
-    <tr><td>Кодек видео</td><td>${esc(tools.encoder || "—")}</td></tr>
-    <tr><td>Конвертер фото iPhone (sips)</td><td>${tools.sips ? "есть" : "нет — HEIC лучше заранее перевести в JPG"}</td></tr></table></div>`;
-  $("#testC").onclick = async () => guard(async () => startJob(await api("/api/claude/test", { body: {} })));
-  $("#reC").onclick = async () => guard(async () => { await api("/api/claude/status", { body: {} }); await refresh(); toast("Статус обновлён"); });
-  $("#saveS").onclick = async () => guard(async () => {
-    const body = { FAL_KEY: $("#s_fal").value, GEMINI_API_KEY: $("#s_gem").value, APIFY_TOKEN: $("#s_apify").value,
-      CLAUDE_CODE_OAUTH_TOKEN: $("#s_tok").value, AUTH_PASSWORD: $("#s_pw").value,
-      GEMINI_MODEL: $("#s_gm").value, DAILY_LIMIT_USD: $("#s_lim").value, DEMO_MODE: $("#s_demo").checked ? "1" : "0",
-      CLAUDE_MODEL: $("#s_cm").value, CLAUDE_BIN: $("#s_cb").value, CONCEPTS_N: $("#s_cn").value, AUTO_RETRY: $("#s_ar").value,
-      VERTICAL_MODE: $("#s_vm").value, MONTAGE_FIT: $("#s_mf").value, LIBRARY_DIR: $("#s_lib").value, HOST: $("#s_host").value, PORT: $("#s_port").value, AUTH_USER: $("#s_user").value };
-    v.querySelectorAll("[data-role]").forEach((s) => (body["PROVIDER_" + s.dataset.role.toUpperCase()] = s.value));
-    await api("/api/settings", { body });
-    toast("Настройки сохранены"); await refresh();
-  });
 }
 
 // ---------------------------------------------------------------- библиотека «По изделиям»
@@ -899,6 +766,10 @@ async function pollJobs() {
         if (was === "running" && j.status !== "running") {
           toast(j.status === "done" ? `${j.title}: готово` : `${j.title}: ошибка — подробности в окне задачи`, j.status !== "done");
           await refresh();
+        } else if (S.site && S.page === "site") {
+          const key = (x) => JSON.stringify([x.brand && 1, x.research && 1, x.concepts.map((c) => c.preview), x.prompts && x.prompts.created, x.builds.length]);
+          const before = key(S.site); await loadSite(S.site.id);
+          if (key(S.site) !== before) render();
         } else if (S.product && S.page === "product") {
           const before = S.product.clips.length + S.product.videos.length + S.product.concepts.length;
           await loadProduct(S.product.id);
@@ -920,8 +791,3 @@ function drawJobs() {
   box.querySelectorAll("pre").forEach((p) => (p.scrollTop = p.scrollHeight));
 }
 
-// ---------------------------------------------------------------- старт
-(async () => {
-  try { await loadState(); for (const j of S.state.jobs) S.jobs[j.id] = j; if (S.state.jobs.length) pollJobs(); render(); }
-  catch (e) { $("#view").innerHTML = `<div class="panel"><h2>Сервер не отвечает</h2><p class="hint">${esc(e.message)}. Запусти start.command ещё раз.</p></div>`; }
-})();

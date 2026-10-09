@@ -1,3 +1,5 @@
 # Всё остальное — стандартная библиотека Python
 fal-client>=0.5
 google-genai>=1.0
+Pillow>=10
+playwright>=1.45

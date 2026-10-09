@@ -312,10 +312,13 @@ TAGLINE_SCHEMA = {"type": "object", "properties": {"taglines": {"type": "array",
 
 def run_tagline(job, pid):
     p = store.load_product(pid)
-    prompt = f"""Придумай 6 коротких слоганов (2–5 слов) для финального кадра рекламного ролика кольца.
+    from . import niches
+    c = niches.ctx(p.get("niche"))
+    prompt = f"""Придумай 6 коротких слоганов (2–5 слов) для финального кадра рекламного ролика. Ниша: {c['name']} ({c['product_ru']}).
 Изделие: {p.get('name')} · {p.get('description_ru','')[:600]}
-Профиль вкуса: {store.taste_text()[:600] or '(нет)'}
-Стиль: тихая роскошь, без восклицательных знаков, без «лучший/уникальный», можно поэтично. По-русски."""
+Тон бренда: {c.get('tone','')}
+Профиль вкуса: {store.taste_text(p.get('niche'))[:600] or '(нет)'}
+Стиль: дорого и спокойно, без восклицательных знаков, без «лучший/уникальный», можно поэтично. По-русски."""
     data, meta = brains.ask("publish", prompt, schema=TAGLINE_SCHEMA, temperature=1.0, product=pid, job=job, timeout=300)
     tl = [t.strip().strip('«»"') for t in data.get("taglines", []) if t.strip()][:6]
     store.update_product(pid, lambda x: x.__setitem__("taglines", tl))
@@ -399,7 +402,7 @@ def run_autopilot(job, pid, n_variants=2, n_concepts=None):
         try:
             run_passport(SubJob(job, 0, 0.05), pid)
         except Exception as e:
-            job.say(f"  паспорт не составлен ({str(e)[:200]}) — сценарист опишет кольцо сам")
+            job.say(f"  паспорт не составлен ({str(e)[:200]}) — сценарист опишет товар сам")
     job.say("Шаг 2 · сценарист")
     res = run_scenario(SubJob(job, 0.05, 0.2), pid, n_concepts)
     ids = res["concepts"]
@@ -433,7 +436,7 @@ def rate(pid, video_file, like, tags, comment):
     if not v:
         raise ValueError("Ролик не найден")
     concept = next((c for c in p["concepts"] if c["id"] == v["concept"]), {})
-    store.add_rating({"product": pid, "video": video_file, "like": like, "tags": tags, "comment": comment,
+    store.add_rating({"niche": p.get("niche"), "product": pid, "video": video_file, "like": like, "tags": tags, "comment": comment,
                       "concept_title": v.get("concept_title"), "idea": concept.get("idea"),
                       "hook": concept.get("hook"), "mode": concept.get("mode"), "variant": v.get("variant"),
                       "music": v.get("music"), "models": v.get("models"),
@@ -443,19 +446,19 @@ def rate(pid, video_file, like, tags, comment):
                                          for vv in x["videos"] if vv["file"] == video_file])
 
 
-def run_taste(job, _pid=None):
-    rows = store.ratings()
+def run_taste(job, niche=None):
+    rows = store.ratings(niche)
     if not rows:
         raise ValueError("Пока нет оценок — оцени хотя бы пару роликов.")
     if brains.available("claude") or brains.available("gemini"):
         job.say(f"{_who('taste')} обновляет профиль по {len(rows)} оценкам…")
         try:
-            text, meta = llm.taste_update(rows, store.taste_text())
+            text, meta = llm.taste_update(rows, store.taste_text(niche), niche)
         except Exception as e:
             job.say(f"  ИИ не ответил ({str(e)[:200]}) — собираю профиль простым способом")
             text = llm.taste_fallback(rows)
     else:
         job.say("Ни Claude, ни Gemini не подключены — собираю профиль простым способом.")
         text = llm.taste_fallback(rows)
-    store.save_taste(text)
+    store.save_taste(text, niche)
     return {"taste": text}

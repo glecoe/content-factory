@@ -1,0 +1,369 @@
+// Лаборатория сайтов · интерфейс второго цеха
+const siteUrl = (s, sub, f) => `/files/sites/${s.id}/${sub}/${String(f).split("/").map(encodeURIComponent).join("/")}`;
+const SITE_TABS = [["brief", "Бриф"], ["research", "Ресёрч"], ["concepts", "Концепции"], ["photos", "Фото"], ["prompt", "Промт"], ["build", "Сборка"]];
+const GOALS = ["Оставить заявку", "Позвонить", "Записаться", "Купить", "Запросить расчёт", "Написать в мессенджер"];
+
+async function loadSites() {
+  S.sites = await api(`/api/sites?${lq()}`);
+  S.lab = S.sites.lab.id;
+  try { localStorage.setItem("cf.lab", S.lab); } catch { /* ok */ }
+}
+async function loadSite(id) { S.site = await api(`/api/sites/${id}`); }
+
+function swatches(colors) {
+  return `<div class="swatches">${(colors || []).map((c) => `<div class="sw"><i style="background:${esc(c.hex)}"></i><b>${esc(c.hex)}</b><span>${esc(c.role || c.name || "")}</span></div>`).join("")}</div>`;
+}
+const listHtml = (arr) => (arr || []).length ? `<ul>${arr.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>` : `<p class="meta">—</p>`;
+
+// масштабирование живых превью (iframe 1440px вписывается в ширину карточки)
+function fitFrames(root = document) {
+  root.querySelectorAll(".frame").forEach((w) => {
+    const f = w.querySelector("iframe"); if (!f) return;
+    const fw = +f.getAttribute("width"), fh = +f.getAttribute("height");
+    const sc = w.clientWidth / fw; f.style.transform = `scale(${sc})`; w.style.height = fh * sc + "px";
+  });
+}
+window.addEventListener("resize", () => fitFrames());
+const frame = (src, w = 1440, h = 900, cls = "") =>
+  `<div class="frame ${cls}"><iframe src="${src}" width="${w}" height="${h}" sandbox="allow-scripts" referrerpolicy="no-referrer"></iframe></div>`;
+
+// ---------------------------------------------------------------- список проектов
+function renderSites(v, top) {
+  const L = S.sites;
+  if (!L) { v.innerHTML = `<div class="panel">Загружаю…</div>`; loadSites().then(render); return; }
+  top.innerHTML = `<div><div class="eyebrow">Лаборатория сайтов · направление</div><h1>${esc(L.lab.name)}</h1>
+    <div class="sub">${esc(L.lab.description || "")}</div></div>
+    <button class="btn" id="toLabCtx">Контекст направления</button>`;
+  v.innerHTML = `${spaceCards(L.labs, L.lab.id, false)}
+  <div class="panel"><div class="row"><h2>Сайты направления</h2><span class="spacer"></span><button class="btn primary sm" id="newSite">Новый сайт</button></div>
+    <p class="hint" style="margin-bottom:12px">Бриф → ресёрч лидеров сферы, трендов и фото → 3 концепции с живыми превью → фото → идеальный промт для Claude Code / Codex → сборка и проверка.</p>
+    <div class="site-list">${L.projects.map((p, i) => `<button class="site-card" data-id="${esc(p.id)}" style="--i:${i}">
+      ${p.logo ? `<img class="sc-logo" src="/files/sites/${esc(p.id)}/logo/${encodeURIComponent(p.logo)}" alt="">` : `<span class="sc-mono">${esc((p.name || "?").slice(0, 1))}</span>`}
+      <div class="sc-name">${esc(p.name)}</div><div class="meta">${p.kind === "landing" ? "лендинг" : "сайт"} · этап: ${esc(p.stage)}${p.builds ? ` · сборок: ${p.builds}` : ""}</div>
+      ${p.sphere ? `<div class="meta">${esc(p.sphere)}</div>` : ""}</button>`).join("")
+    || `<p class="hint">В этом направлении сайтов пока нет. Нажми «Новый сайт».</p>`}</div></div>
+  <div class="panel"><h2>Вкус направления</h2>
+    <p class="hint">Свой для каждого направления: стратег учитывает его в концепциях, автор промтов — в промтах. Обновляется по оценкам концепций и сборок этого направления (оценок: ${L.ratings}).</p>
+    <textarea id="siteTaste" style="min-height:180px">${esc(L.taste)}</textarea>
+    <div class="row" style="margin-top:10px"><button class="btn primary" id="saveST">Сохранить</button>
+      <button class="btn" id="updST" ${L.ratings ? "" : "disabled"}>Обновить по оценкам · ${who("site_strategy")}</button></div></div>`;
+  bindSpaceCards(false);
+  $("#toLabCtx").onclick = () => { S.page = "lab"; render(); };
+  $("#newSite").onclick = () => guard(newSite);
+  v.querySelectorAll(".site-card").forEach((b) => (b.onclick = () => guard(async () => { await loadSite(b.dataset.id); S.page = "site"; S.siteTab = S.siteTab || "brief"; render(); })));
+  $("#saveST").onclick = () => guard(async () => { await api(`/api/sites/taste?${lq()}`, { body: { text: $("#siteTaste").value } }); toast("Сохранено"); });
+  $("#updST").onclick = () => guard(async () => startJob(await api(`/api/sites/taste/update?${lq()}`, { body: {} })));
+}
+
+// ---------------------------------------------------------------- проект
+function renderSite(v, top) {
+  const s = S.site;
+  S.siteTab = S.siteTab || "brief";
+  top.innerHTML = `<div><div class="crumb"><a href="#" id="toSites">${esc(S.sites?.lab?.name || "Лаборатория сайтов")}</a></div><h1>${esc(s.name)}</h1>
+    <div class="sub">${esc(s.sphere || "сфера не указана")} · ${s.kind === "landing" ? "лендинг" : `сайт, ${s.pages_n} стр.`}</div></div>
+    <div class="autopilot"><div class="meta">Бренд-кит → ресёрч → 3 концепции с превью, одной кнопкой</div>
+      <button class="btn dark" id="siteAuto" ${brainOK() && s.sphere ? "" : "disabled title='Заполни сферу и подключи Claude или Gemini'"}>Подготовить концепции</button></div>`;
+  $("#toSites").onclick = (e) => { e.preventDefault(); S.page = "labhome"; loadSites().then(render); };
+  $("#siteAuto").onclick = () => guard(async () => { await saveBrief(true); startJob(await api(`/api/sites/${s.id}/auto`, { body: {} })); S.siteTab = "concepts"; render(); });
+  const done = { brief: !!s.sphere, research: !!s.research, concepts: s.concepts.length > 0, photos: (s.photos?.slots || []).some((x) => x.chosen), prompt: !!s.prompts, build: s.builds.length > 0 };
+  v.innerHTML = `<div class="steps">${SITE_TABS.map(([k, t], i) => `<button data-tab="${k}" class="${S.siteTab === k ? "on" : ""} ${done[k] ? "done" : ""}"><span class="n">${i + 1}</span>${t}</button>`).join("")}</div><div id="tab"></div>`;
+  v.querySelectorAll(".steps button").forEach((b) => (b.onclick = () => { S.siteTab = b.dataset.tab; render(); }));
+  ({ brief: siteBrief, research: siteResearch, concepts: siteConcepts, photos: sitePhotos, prompt: sitePrompt, build: siteBuild })[S.siteTab]($("#tab"), s);
+  requestAnimationFrame(() => fitFrames());
+}
+
+// ---------------------------------------------------------------- 1. бриф
+function siteBrief(t, s) {
+  const B = s.brand;
+  t.innerHTML = `
+  <div class="panel"><h2>О компании</h2>
+    <div class="grid2">
+      <div class="field"><label>Название компании</label><input type="text" id="b_name" value="${esc(s.name)}"></div>
+      <div class="field"><label>Главное действие на сайте</label><input type="text" id="b_goal" list="goals" value="${esc(s.goal)}" placeholder="Оставить заявку"><datalist id="goals">${GOALS.map((g) => `<option value="${g}">`).join("")}</datalist></div>
+    </div>
+    <div class="field"><label>Сфера деятельности — чем занимается, что продаёт, чем отличается</label><textarea id="b_sphere" placeholder="Стоматологическая клиника в Казани: имплантация, виниры, детская стоматология. Премиум-сегмент.">${esc(s.sphere)}</textarea></div>
+    <div class="field"><label>Аудитория (необязательно)</label><input type="text" id="b_aud" value="${esc(s.audience)}" placeholder="Взрослые 30–55 лет, ценят качество и сервис"></div>
+    <div class="field"><label>Логотип (png, svg, jpg) — или оставь пустым, тогда фирменный стиль придумается по названию</label>
+      <div class="logo-row">
+        ${s.logo ? `<div class="logo-box"><img src="${siteUrl(s, "logo", s.logo)}" alt="логотип"></div><button class="btn sm ghost danger" id="logoRm">убрать</button>` : ""}
+        <div class="drop" id="logoDrop">${s.logo ? "Заменить логотип" : "Перетащи логотип сюда или нажми"}<input type="file" id="logoIn" accept="image/*,.svg" hidden></div>
+      </div></div>
+  </div>
+  <div class="panel"><h2>Формат</h2>
+    <div class="seg" id="b_kind"><button data-v="landing" class="${s.kind === "landing" ? "on" : ""}">Лендинг — одна страница</button><button data-v="site" class="${s.kind !== "landing" ? "on" : ""}">Полноценный сайт</button></div>
+    <div id="pagesBox" ${s.kind === "landing" ? "hidden" : ""} style="margin-top:14px">
+      <div class="grid2"><div class="field"><label>Сколько страниц</label><input type="number" id="b_pages" min="2" max="30" value="${s.kind === "landing" ? 5 : s.pages_n}"></div>
+      <div class="field"><label>Какие страницы обязательно (необязательно)</label><input type="text" id="b_wish" value="${esc(s.pages_wish)}" placeholder="Главная, Услуги, Цены, Врачи, Контакты"></div></div>
+    </div>
+    <div class="field" style="margin-top:12px"><label>Технология</label>
+      <div class="seg" id="b_stack"><button data-v="static" class="${s.stack !== "nextjs" ? "on" : ""}">HTML/CSS — собирается и смотрится прямо здесь</button><button data-v="nextjs" class="${s.stack === "nextjs" ? "on" : ""}">Next.js + Tailwind — для продакшена</button></div></div>
+    <div class="field"><label>Сайты, которые нравятся (ссылки через пробел или с новой строки, необязательно)</label><textarea id="b_refs" style="min-height:60px">${esc(s.references)}</textarea></div>
+    <div class="field"><label>Пожелания (необязательно)</label><textarea id="b_notes" style="min-height:60px" placeholder="Тёмная тема, без стоковых фото, нужен калькулятор стоимости…">${esc(s.notes)}</textarea></div>
+    <div class="row"><button class="btn primary" id="saveBrief">Сохранить бриф</button>
+      <button class="btn" id="brandBtn" ${brainOK() ? "" : "disabled"}>${B ? "Пересобрать бренд-кит" : "Собрать бренд-кит"} · ${who("site_brand")}</button></div>
+  </div>
+  ${B ? `<div class="panel"><h2>Бренд-кит</h2><p class="lead">${esc(B.summary)}</p>
+    ${swatches(B.colors)}
+    ${B.measured?.length ? `<p class="meta">Цвета, измеренные по логотипу: ${B.measured.map((h) => `<span class="dotc" style="background:${h}"></span>${h}`).join(" ")}</p>` : ""}
+    <div class="grid2"><div><h3>Шрифты</h3><p><b>${esc(B.fonts?.heading)}</b> — заголовки<br><b>${esc(B.fonts?.body)}</b> — текст<br><span class="meta">${esc(B.fonts?.why || "")}</span></p></div>
+    <div><h3>Характер и тон</h3><p>${esc((B.personality || []).join(" · "))}</p><p class="meta">${esc(B.tone_of_voice)}</p></div>
+    <div><h3>Делать</h3>${listHtml(B.do)}</div><div><h3>Не делать</h3>${listHtml(B.dont)}</div></div></div>` : ""}`;
+  t.querySelectorAll("#b_kind button").forEach((b) => (b.onclick = () => { t.querySelectorAll("#b_kind button").forEach((x) => x.classList.toggle("on", x === b)); $("#pagesBox").hidden = b.dataset.v === "landing"; }));
+  t.querySelectorAll("#b_stack button").forEach((b) => (b.onclick = () => { t.querySelectorAll("#b_stack button").forEach((x) => x.classList.toggle("on", x === b)); }));
+  $("#saveBrief").onclick = () => guard(saveBrief);
+  $("#brandBtn").onclick = () => guard(async () => { await saveBrief(true); startJob(await api(`/api/sites/${s.id}/brand`, { body: {} })); });
+  const drop = $("#logoDrop"), inp = $("#logoIn");
+  const up = (f) => guard(async () => { if (!f) return; S.site = await api(`/api/sites/${s.id}/logo?name=${encodeURIComponent(f.name)}`, { raw: f }); toast("Логотип загружен"); render(); });
+  drop.onclick = () => inp.click(); inp.onchange = () => up(inp.files[0]);
+  drop.ondragover = (e) => { e.preventDefault(); drop.classList.add("over"); };
+  drop.ondragleave = () => drop.classList.remove("over");
+  drop.ondrop = (e) => { e.preventDefault(); drop.classList.remove("over"); up(e.dataTransfer.files[0]); };
+  if ($("#logoRm")) $("#logoRm").onclick = () => guard(async () => { S.site = await api(`/api/sites/${s.id}/logoremove`, { body: {} }); render(); });
+}
+// сохранить бриф, если открыта вкладка «Бриф» (с других вкладок — ничего не делает)
+async function saveBrief(silent) {
+  if (!$("#b_name") || !S.site) return;
+  S.site = await api(`/api/sites/${S.site.id}/brief`, { body: { name: $("#b_name").value, goal: $("#b_goal").value,
+    sphere: $("#b_sphere").value, audience: $("#b_aud").value, kind: $("#b_kind button.on").dataset.v,
+    stack: $("#b_stack button.on").dataset.v, pages_n: +($("#b_pages").value || 5), pages_wish: $("#b_wish").value,
+    references: $("#b_refs").value, notes: $("#b_notes").value } });
+  if (silent !== true) { toast("Бриф сохранён"); render(); }
+}
+
+// ---------------------------------------------------------------- 2. ресёрч
+function siteResearch(t, s) {
+  const R = s.research;
+  t.innerHTML = `<div class="panel"><div class="row"><div><h2>Ресёрч</h2>
+      <p class="hint" style="margin:0">${who("site_research")} ищет лидеров сферы и эталоны дизайна, прототип снимает скриншоты, ${who("site_research")} разбирает их глазами. 5–15 минут.</p></div>
+      <span class="spacer"></span><button class="btn primary" id="runRes" ${brainOK() && s.sphere ? "" : "disabled"}>${R ? "Обновить ресёрч" : "Запустить ресёрч"}</button></div></div>
+  ${R ? `
+  <div class="panel"><h2>Сайты</h2><div class="site-shots">${R.sites.map((x) => {
+      const sh = R.shots?.[x.url]; const rv = (R.visual?.reviews || []).find((r) => r.url === x.url) || {};
+      return `<div class="shot-card">${sh ? `<a href="${siteUrl(s, "shots", sh.full)}" target="_blank"><img src="${siteUrl(s, "shots", sh.hero)}" alt=""></a>` : `<div class="noshot">скриншота нет</div>`}
+        <div class="b"><div class="row"><b>${esc(x.name)}</b><span class="badge ${x.kind === "reference" ? "exp" : ""}">${x.kind === "reference" ? "эталон" : "сфера"}</span></div>
+        <a class="meta" href="${esc(x.url)}" target="_blank" rel="noopener">${esc(x.url.replace(/^https?:\/\//, "").slice(0, 40))}</a>
+        <p>${esc(x.why)}</p>${rv.steal ? `<p class="steal">Взять: ${esc(rv.steal)}</p>` : ""}${rv.weak ? `<p class="meta">Слабо: ${esc(rv.weak)}</p>` : ""}</div></div>`; }).join("")}</div></div>
+  ${(R.photo_trends || []).length ? `<div class="panel"><h2>Фото, которые сейчас работают</h2>
+    <div class="trends">${R.photo_trends.map((x) => `<div class="trend-card"><b>${esc(x.name)}</b><p>${esc(x.what)}</p><p class="use">Как снять: ${esc(x.how_to_shoot)}</p>${x.where ? `<p class="meta">Где: ${esc(x.where)}</p>` : ""}</div>`).join("")}</div>
+    ${(R.photo_avoid || []).length ? `<h3>Выглядит дёшево</h3>${listHtml(R.photo_avoid)}` : ""}</div>` : ""}
+  ${R.visual ? `<div class="panel"><h2>Визуальный язык сферы</h2><p class="lead">${esc(R.visual.common_visual_language)}</p><h3>Чем выделиться</h3>${listHtml(R.visual.gaps)}</div>` : ""}
+  <div class="panel"><h2>Тренды</h2><div class="trends">${(R.trends || []).map((x) => `<div class="trend-card"><b>${esc(x.name)}</b><p class="use">${esc(x.how_to_use)}</p></div>`).join("")}</div>
+    <div class="grid2"><div><h3>Типично для сферы</h3>${listHtml(R.sphere_patterns)}</div><div><h3>Обязательные блоки</h3>${listHtml(R.must_have_sections)}</div>
+    <div><h3>Что повышает заявки</h3>${listHtml(R.conversion)}</div><div><h3>Частые ошибки</h3>${listHtml(R.mistakes)}</div></div>
+    ${(R.sources || []).length ? `<h3>Источники</h3><ol class="src">${R.sources.map((x) => `<li><a href="${esc(x.url)}" target="_blank" rel="noopener">${esc(x.title || x.url)}</a></li>`).join("")}</ol>` : ""}</div>`
+  : `<div class="panel"><p class="hint">Ресёрча пока нет.</p></div>`}`;
+  $("#runRes").onclick = () => guard(async () => { await saveBrief(true); startJob(await api(`/api/sites/${s.id}/research`, { body: {} })); });
+}
+
+// ---------------------------------------------------------------- 3. концепции
+function siteConcepts(t, s) {
+  t.innerHTML = `<div class="panel"><div class="row"><div><h2>Концепции</h2>
+      <p class="hint" style="margin:0">Стратег (${who("site_strategy")}) предлагает 3 разных направления и рисует первый экран каждого. Выбери одно — можно с правками словами.</p></div>
+      <span class="spacer"></span><button class="btn primary" id="runCon" ${brainOK() ? "" : "disabled"}>${s.concepts.length ? "Предложить заново" : "Предложить 3 концепции"}</button></div></div>
+  <div class="concepts3">${s.concepts.map((c, i) => `
+    <div class="cc ${s.chosen === i ? "chosen" : ""}">
+      ${c.preview ? frame(siteUrl(s, "previews", c.preview)) : `<div class="noshot tall">превью рисуется…</div>`}
+      <div class="b">
+        <div class="row"><h3>${esc(c.name)}</h3>${s.chosen === i ? `<span class="badge ok">выбрана</span>` : ""}<span class="spacer"></span>
+          ${c.preview ? `<a class="btn sm ghost" href="${siteUrl(s, "previews", c.preview)}" target="_blank">открыть</a>` : ""}</div>
+        <p>${esc(c.idea)}</p>
+        ${swatches(c.palette)}
+        <p class="meta"><b>${esc(c.typography?.heading)}</b> + ${esc(c.typography?.body)} · ${esc(c.mood || "")}</p>
+        <p class="meta">Сетка: ${esc(c.layout)}</p>
+        ${c.signature ? `<p class="steal">Фишка: ${esc(c.signature)}</p>` : ""}
+        <details><summary class="meta">Почему так · страницы и секции</summary>
+          <p>${esc(c.why || "")}</p>
+          ${(c.pages || []).map((pg) => `<p><b>${esc(pg.title)}</b> <span class="meta">/${esc(pg.slug)}</span><br><span class="meta">${(pg.sections || []).map(esc).join(" → ")}</span></p>`).join("")}
+        </details>
+        <div class="field" style="margin-top:10px"><textarea class="fb" placeholder="Что поменять в этой концепции (необязательно)">${s.chosen === i ? esc(s.feedback) : ""}</textarea></div>
+        <div class="row">
+          <button class="btn primary sm pick" data-i="${i}">Выбрать</button>
+          <button class="btn sm ghost redo" data-i="${i}">Перерисовать превью</button>
+          <span class="spacer"></span>
+          <button class="btn sm ${c.like === true ? "primary" : ""} lk" data-i="${i}" data-v="1" title="Нравится">♥</button>
+          <button class="btn sm ${c.like === false ? "danger" : ""} lk" data-i="${i}" data-v="0" title="Не нравится">✕</button>
+        </div>
+      </div></div>`).join("")}</div>`;
+  $("#runCon").onclick = () => guard(async () => startJob(await api(`/api/sites/${s.id}/concepts`, { body: { n: 3 } })));
+  t.querySelectorAll(".pick").forEach((b) => (b.onclick = () => guard(async () => {
+    const fb = b.closest(".cc").querySelector(".fb").value;
+    S.site = await api(`/api/sites/${s.id}/choose`, { body: { idx: +b.dataset.i, feedback: fb } });
+    toast("Концепция выбрана"); S.siteTab = "photos"; render();
+  })));
+  t.querySelectorAll(".redo").forEach((b) => (b.onclick = () => guard(async () => startJob(await api(`/api/sites/${s.id}/preview`, { body: { idx: +b.dataset.i } })))));
+  t.querySelectorAll(".lk").forEach((b) => (b.onclick = () => guard(async () => {
+    S.site = await api(`/api/sites/${s.id}/rate`, { body: { what: "concept", ref: +b.dataset.i, like: b.dataset.v === "1", comment: b.closest(".cc").querySelector(".fb").value } });
+    toast("Оценка сохранена — она пойдёт во вкус сайтов"); render();
+  })));
+}
+
+// ---------------------------------------------------------------- 4. промт
+function sitePrompt(t, s) {
+  const c = s.chosen != null ? s.concepts[s.chosen] : null;
+  const P = s.prompts;
+  t.innerHTML = `<div class="panel"><div class="row"><div><h2>Пакет промтов для Claude Code / Codex</h2>
+      <p class="hint" style="margin:0">${c ? `Концепция: <b>${esc(c.name)}</b>${s.feedback ? ` · правки: ${esc(s.feedback)}` : ""}.` : "Сначала выбери концепцию на шаге 3."}
+      Пакет: MASTER (он же CLAUDE.md / AGENTS.md) с дизайн-системой, промт на каждую страницу с точными текстами, тексты отдельно, список фото и чек-лист приёмки.</p></div>
+      <span class="spacer"></span><button class="btn primary" id="runPr" ${c && brainOK() ? "" : "disabled"}>${P ? "Написать заново" : "Написать пакет"} · ${who("site_prompt")}</button></div></div>
+  ${P ? `<div class="panel prompt-ed"><div class="pfiles">${P.files.map((f, i) => `<button data-f="${esc(f)}" class="${i === 0 ? "on" : ""}">${esc(f)}</button>`).join("")}</div>
+    <div><textarea id="pText" class="code" style="min-height:520px"></textarea>
+    <div class="row" style="margin-top:10px"><button class="btn" id="pSave">Сохранить правки</button><button class="btn" id="pCopy">Копировать</button>
+      <a class="btn" href="/api/sites/${s.id}/download?what=prompts">Скачать пакет .zip</a><span class="spacer"></span>
+      <button class="btn dark" id="toBuild">Собрать сайт →</button></div></div></div>` : ""}`;
+  $("#runPr").onclick = () => guard(async () => startJob(await api(`/api/sites/${s.id}/prompts`, { body: {} })));
+  if (!P) return;
+  let cur = P.files[0];
+  const open = async (f) => { cur = f; $("#pText").value = (await api(`/api/sites/${s.id}/prompt?file=${encodeURIComponent(f)}`)).text;
+    t.querySelectorAll(".pfiles button").forEach((b) => b.classList.toggle("on", b.dataset.f === f)); };
+  t.querySelectorAll(".pfiles button").forEach((b) => (b.onclick = () => guard(() => open(b.dataset.f))));
+  $("#pSave").onclick = () => guard(async () => { await api(`/api/sites/${s.id}/promptsave`, { body: { file: cur, text: $("#pText").value } }); toast("Сохранено"); });
+  $("#pCopy").onclick = () => copy($("#pText").value);
+  $("#toBuild").onclick = () => { S.siteTab = "build"; render(); };
+  guard(() => open(cur));
+}
+
+// ---------------------------------------------------------------- 5. сборка
+function siteBuild(t, s) {
+  const builds = s.builds.slice().reverse();
+  const nextjs = s.stack === "nextjs";
+  t.innerHTML = `<div class="panel"><div class="row"><div><h2>Сборка</h2>
+      <p class="hint" style="margin:0">Claude Code по подписке собирает сайт по пакету промтов (обычно 5–20 минут), затем снимает скриншоты десктопа и мобильной версии и проверяет себя.
+      ${nextjs ? "Для Next.js собираются исходники проекта; посмотреть его можно после <code>npm install && npm run dev</code>." : ""}</p></div></div>
+    <div class="field" style="margin-top:12px"><label>Пожелания к сборке (необязательно)</label><textarea id="bExtra" style="min-height:56px" placeholder="Например: добавь калькулятор стоимости на главную"></textarea></div>
+    <button class="btn primary" id="runBuild" ${s.prompts && claudeOK() ? "" : "disabled"}>${builds.length ? "Собрать новую версию" : "Собрать сайт"}</button>
+    ${!claudeOK() ? `<span class="meta"> — для сборки нужен Claude Code (вход по подписке)</span>` : ""}</div>
+  ${builds.map((b) => buildCard(s, b)).join("")}`;
+  $("#runBuild").onclick = () => guard(async () => startJob(await api(`/api/sites/${s.id}/build`, { body: { extra: $("#bExtra").value } })));
+  t.querySelectorAll(".bcard").forEach((el) => {
+    const b = s.builds.find((x) => x.dir === el.dataset.d);
+    const show = (page, mode) => {
+      el.querySelector(".viewer").innerHTML = mode === "mobile" ? frame(siteUrl(s, `builds/${b.dir}`, page), 390, 844, "mobile") : frame(siteUrl(s, `builds/${b.dir}`, page));
+      el.querySelector(".newtab").href = siteUrl(s, `builds/${b.dir}`, page); fitFrames(el);
+    };
+    let page = b.pages[0], mode = "desktop";
+    if (page) show(page, mode);
+    el.querySelectorAll("[data-page]").forEach((x) => (x.onclick = () => { page = x.dataset.page; el.querySelectorAll("[data-page]").forEach((y) => y.classList.toggle("on", y === x)); show(page, mode); }));
+    el.querySelectorAll("[data-mode]").forEach((x) => (x.onclick = () => { mode = x.dataset.mode; el.querySelectorAll("[data-mode]").forEach((y) => y.classList.toggle("on", y === x)); show(page, mode); }));
+    el.querySelector(".fix").onclick = () => guard(async () => startJob(await api(`/api/sites/${s.id}/fix`, { body: { dir: b.dir, extra: el.querySelector(".fx").value, use_review: true } })));
+    const rb = el.querySelector(".resumeBtn");
+    if (rb) rb.onclick = () => guard(async () => startJob(await api(`/api/sites/${s.id}/resume`, { body: { dir: b.dir, extra: el.querySelector(".fx").value } })));
+    el.querySelector(".rev").onclick = () => guard(async () => startJob(await api(`/api/sites/${s.id}/review`, { body: { dir: b.dir } })));
+    el.querySelectorAll(".lk").forEach((x) => (x.onclick = () => guard(async () => {
+      S.site = await api(`/api/sites/${s.id}/rate`, { body: { what: "build", ref: b.dir, like: x.dataset.v === "1", comment: el.querySelector(".fx").value } });
+      toast("Оценка сохранена"); render(); })));
+  });
+}
+function buildCard(s, b) {
+  const R = b.review;
+  return `<div class="panel bcard" data-d="${esc(b.dir)}">
+    <div class="row"><h2>Версия ${esc(b.dir)}</h2>
+      ${b.status === "partial" ? `<span class="badge bad">не закончена</span>` : b.status === "running" ? `<span class="badge exp">собирается</span>` : `<span class="badge ok">готова</span>`}
+      <span class="meta">${esc((b.created || "").replace("T", " "))} · ${esc(b.concept || "")} · файлов ${b.files ?? "?"} · ${b.turns || "?"} шагов · ${Math.round((b.seconds || 0) / 60)} мин${(b.sessions || []).length > 1 ? ` · сессий ${b.sessions.length}` : ""}</span>
+      <span class="spacer"></span>
+      <button class="btn sm ${b.like === true ? "primary" : ""} lk" data-v="1">♥</button><button class="btn sm ${b.like === false ? "danger" : ""} lk" data-v="0">✕</button>
+      <a class="btn sm" href="/api/sites/${s.id}/download?what=${encodeURIComponent(b.dir)}">Скачать .zip</a></div>
+    ${b.pages.length ? `<div class="row" style="margin:10px 0"><div class="seg small">${b.pages.map((p, i) => `<button data-page="${esc(p)}" class="${i === 0 ? "on" : ""}">${esc(p.replace(".html", ""))}</button>`).join("")}</div>
+      <span class="spacer"></span><div class="seg small"><button data-mode="desktop" class="on">Десктоп</button><button data-mode="mobile">Телефон</button></div>
+      <a class="btn sm ghost newtab" target="_blank">в новой вкладке</a></div>
+      <div class="viewer"></div>` : `<p class="hint">HTML-страниц в корне нет${s.stack === "nextjs" ? " — это проект Next.js, скачай его и запусти локально" : ""}.</p>`}
+    ${R ? `<div class="review"><div class="row"><b>Проверка: ${esc(R.score)}/100</b><span class="meta">${esc(R.summary)}</span></div>
+      ${(R.issues || []).length ? `<ul class="issues2">${R.issues.map((i) => `<li class="${esc(i.severity || "")}"><b>${esc(i.page || "")}</b> ${esc(i.problem)} <span class="meta">→ ${esc(i.fix)}</span></li>`).join("")}</ul>` : ""}</div>` : ""}
+    ${b.status === "partial" ? `<div class="resume"><b>Сборка остановилась на полпути — всё сделанное сохранено.</b>
+      <span class="meta">${esc(b.summary || "")}</span>
+      <button class="btn primary sm resumeBtn" ${claudeOK() ? "" : "disabled"}>Продолжить сборку</button></div>` : ""}
+    ${b.stack === "nextjs" && !b.pages.length ? `<p class="hint">Это проект Next.js: файлов ${b.files ?? "?"}. Посмотреть — скачать архив и в папке выполнить <code>npm install && npm run dev</code> (нужен Node.js).</p>` : ""}
+    ${(b.fixes || []).length ? `<p class="meta">Правок внесено: ${b.fixes.length}. Последняя: ${esc((b.fixes.at(-1).summary || "").slice(0, 200))}</p>` : ""}
+    <div class="field" style="margin-top:10px"><textarea class="fx" style="min-height:56px" placeholder="Что поправить своими словами (необязательно)">${esc(b.comment || "")}</textarea></div>
+    <div class="row"><button class="btn primary sm fix" ${claudeOK() ? "" : "disabled"}>Исправить${R?.issues?.length ? " замечания" : ""}</button>
+      <button class="btn sm rev" ${brainOK() ? "" : "disabled"}>Проверить заново</button>
+      ${b.summary ? `<details><summary class="meta">Отчёт Claude Code</summary><pre class="rep">${esc(b.summary)}</pre></details>` : ""}</div>
+  </div>`;
+}
+
+
+// ---------------------------------------------------------------- 4. фото
+const ASPECTS = ["21:9", "16:9", "3:2", "4:3", "5:4", "1:1", "4:5", "3:4", "2:3", "9:16"];
+const KIND_RU = { ai: "ИИ", upload: "своё", enhanced: "улучшено" };
+function sitePhotos(t, s) {
+  const ph = s.photos || { slots: [], uploads: [] };
+  const c = s.chosen != null ? s.concepts[s.chosen] : null;
+  const demo = S.state.settings.demo_mode;
+  const empty = ph.slots.filter((x) => !x.chosen).length;
+  const free = (ph.uploads || []).filter((u) => !u.slot);
+  const price = (n) => demo ? "демо, $0" : `~$${(0.12 * n).toFixed(2)}`;
+  t.innerHTML = `
+  <div class="panel"><div class="row"><div><h2>Фото для сайта</h2>
+      <p class="hint" style="margin:0">Фотодиректор (${who("site_strategy")}) по концепции и фото-трендам из ресёрча составляет единый фотостиль и список мест под фото.
+      Каждое место можно закрыть фото от ИИ (Nano Banana 2) или своим — а своё ИИ доведёт до уровня хорошей фотосессии. Выбранные фото уйдут в промт и в сборку.</p></div>
+      <span class="spacer"></span>
+      <button class="btn ${ph.slots.length ? "" : "primary"}" id="phPlan" ${c && brainOK() ? "" : "disabled title='Сначала выбери концепцию'"}>${ph.slots.length ? "Новый план фото" : "Составить план фото"}</button></div>
+    ${ph.style ? `<div class="ph-style"><b>Фотостиль:</b> ${esc(ph.style.summary)}
+      <span class="meta">${[ph.style.light && "свет — " + ph.style.light, ph.style.color_grade && "цвет — " + ph.style.color_grade, ph.style.composition && "композиция — " + ph.style.composition, ph.style.people && "люди — " + ph.style.people, ph.style.avoid && "избегать — " + ph.style.avoid].filter(Boolean).map(esc).join(" · ")}</span></div>` : ""}
+    ${ph.slots.length ? `<div class="row" style="margin-top:12px">
+      <button class="btn primary" id="phGenAll" ${empty ? "" : "disabled"}>Сгенерировать пустые места (${empty}) · ${price(empty)}</button>
+      <button class="btn" id="phAssign" ${free.length && brainOK() ? "" : "disabled"}>Разложить мои фото по местам (${free.length})</button></div>` : ""}
+  </div>
+  <div class="panel"><h2>Мои фото</h2>
+    <p class="hint">Загрузи свои фото (офис, команда, товары, работы) — ИИ разложит их по местам и подскажет, какие улучшить. Можно и сразу в конкретное место кнопкой «Своё фото».</p>
+    <div class="drop" id="phDrop">Перетащи фото сюда или нажми, чтобы выбрать<input type="file" id="phIn" multiple accept="image/*,.heic,.HEIC" hidden></div>
+    ${(ph.uploads || []).length ? `<div class="ups">${ph.uploads.map((u) => `<div class="up">
+      <img src="${siteUrl(s, "photos", u.file)}" alt=""><div class="meta">${esc(u.name || u.file)}</div>
+      <select data-use="${esc(u.file)}"><option value="">— место —</option>${ph.slots.map((x) => `<option value="${esc(x.id)}" ${u.slot === x.id ? "selected" : ""}>${esc(x.id)}</option>`).join("")}</select></div>`).join("")}</div>` : ""}
+    ${(ph.advice || []).length ? `<p class="meta">Совет фоторедактора: улучшить ${ph.advice.map((a) => `${esc(a.slot)} (${a.mode === "studio" ? "фотосессия" : "ретушь"})`).join(", ")}</p>` : ""}
+  </div>
+  <div class="slots">${ph.slots.map((x) => slotCard(s, x)).join("")}</div>`;
+  $("#phPlan").onclick = () => guard(async () => { if (ph.slots.length && !confirm("Составить новый план? Текущие места и варианты заменятся (свои загруженные фото останутся).")) return;
+    startJob(await api(`/api/sites/${s.id}/photoplan`, { body: {} })); });
+  if ($("#phGenAll")) $("#phGenAll").onclick = () => guard(async () => {
+    if (!demo && !confirm(`Сгенерировать ${empty} фото в Nano Banana 2? Примерно $${(0.12 * empty).toFixed(2)}.`)) return;
+    startJob(await api(`/api/sites/${s.id}/photogen`, { body: {} })); });
+  if ($("#phAssign")) $("#phAssign").onclick = () => guard(async () => startJob(await api(`/api/sites/${s.id}/photoassign`, { body: {} })));
+  const drop = $("#phDrop"), inp = $("#phIn");
+  const up = async (files, slot = "") => { for (const f of files) { toast(`Загружаю ${f.name}…`);
+      await guard(async () => { S.site = await api(`/api/sites/${s.id}/photoupload?name=${encodeURIComponent(f.name)}&slot=${encodeURIComponent(slot)}`, { raw: f }); }); }
+    render(); };
+  drop.onclick = () => inp.click(); inp.onchange = () => up([...inp.files]);
+  drop.ondragover = (e) => { e.preventDefault(); drop.classList.add("over"); };
+  drop.ondragleave = () => drop.classList.remove("over");
+  drop.ondrop = (e) => { e.preventDefault(); drop.classList.remove("over"); up([...e.dataTransfer.files]); };
+  t.querySelectorAll("[data-use]").forEach((sel) => (sel.onchange = () => guard(async () => { S.site = await api(`/api/sites/${s.id}/photouse`, { body: { file: sel.dataset.use, slot: sel.value } }); render(); })));
+  t.querySelectorAll(".slot").forEach((el) => {
+    const id = el.dataset.id, x = ph.slots.find((y) => y.id === id);
+    el.querySelectorAll("[data-v]").forEach((b) => (b.onclick = () => guard(async () => { S.site = await api(`/api/sites/${s.id}/photochoose`, { body: { slot: id, file: b.dataset.v } }); render(); })));
+    el.querySelector(".gen").onclick = () => guard(async () => {
+      if (!demo && !confirm("Сгенерировать фото для этого места? ~$0.12")) return;
+      await api(`/api/sites/${s.id}/photoslot`, { body: { slot: id, prompt_en: el.querySelector(".pe").value } });
+      startJob(await api(`/api/sites/${s.id}/photogen`, { body: { slots: [id] } })); });
+    el.querySelectorAll(".enh").forEach((b) => (b.onclick = () => guard(async () => {
+      if (!x.chosen) return toast("Сначала выбери фото, которое улучшать", true);
+      if (!demo && !confirm(`${b.textContent.trim()} — Nano Banana 2, ~$0.12?`)) return;
+      startJob(await api(`/api/sites/${s.id}/photoenhance`, { body: { slot: id, file: x.chosen, mode: b.dataset.mode, extra: el.querySelector(".ex").value } })); })));
+    const fi = el.querySelector(".own-in");
+    el.querySelector(".own").onclick = () => fi.click();
+    fi.onchange = () => up([...fi.files], id);
+    el.querySelector(".savep").onclick = () => guard(async () => {
+      S.site = await api(`/api/sites/${s.id}/photoslot`, { body: { slot: id, prompt_en: el.querySelector(".pe").value, alt_ru: el.querySelector(".alt").value, aspect: el.querySelector(".asp").value } });
+      toast("Сохранено"); });
+  });
+}
+function slotCard(s, x) {
+  return `<div class="slot ${x.chosen ? "has" : ""}" data-id="${esc(x.id)}">
+    <div class="slot-img">${x.chosen ? `<a href="${siteUrl(s, "photos", x.chosen)}" target="_blank"><img src="${siteUrl(s, "photos", x.chosen)}" alt="${esc(x.alt_ru || "")}"></a>` : `<span>${esc(x.subject_ru || "нет фото")}</span>`}</div>
+    <div class="b">
+      <div class="row"><b>${esc(x.id)}</b><span class="badge">${esc(x.aspect)}</span><span class="meta">${esc(x.page)} · ${esc(x.section)}</span></div>
+      <p class="meta" style="margin:4px 0 8px">${esc(x.purpose || x.subject_ru || "")}</p>
+      ${(x.variants || []).length ? `<div class="vars">${x.variants.map((v) => `<button data-v="${esc(v.file)}" class="${x.chosen === v.file ? "on" : ""}" title="${esc(KIND_RU[v.kind] || v.kind)}"><img src="${siteUrl(s, "photos", v.file)}" alt=""><i>${esc(KIND_RU[v.kind] || "")}</i></button>`).join("")}</div>` : ""}
+      <div class="row" style="margin-top:8px">
+        <button class="btn sm primary gen">${x.chosen ? "Ещё вариант ИИ" : "Сгенерировать"}</button>
+        <button class="btn sm own">Своё фото</button><input type="file" class="own-in" accept="image/*,.heic" hidden>
+        <button class="btn sm enh" data-mode="retouch" ${x.chosen ? "" : "disabled"}>Ретушь</button>
+        <button class="btn sm enh" data-mode="studio" ${x.chosen ? "" : "disabled"}>Как с фотосессии</button>
+      </div>
+      <input type="text" class="ex" placeholder="Пожелание к улучшению (необязательно): тёплый свет, белый фон…" style="margin-top:8px">
+      <details style="margin-top:8px"><summary class="meta">Промт, alt и пропорции</summary>
+        <textarea class="pe code" style="min-height:90px">${esc(x.prompt_en || "")}</textarea>
+        <div class="grid2" style="margin-top:6px"><input type="text" class="alt" value="${esc(x.alt_ru || "")}" placeholder="alt-текст">
+          <select class="asp">${ASPECTS.map((a) => `<option ${a === x.aspect ? "selected" : ""}>${a}</option>`).join("")}</select></div>
+        <button class="btn sm savep" style="margin-top:6px">Сохранить</button></details>
+    </div></div>`;
+}

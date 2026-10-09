@@ -39,17 +39,19 @@ def build_pack(job, pid: str, video_file: str) -> dict:
     if not v:
         raise ValueError("Ролик не найден")
     concept = next((c for c in p["concepts"] if c["id"] == v["concept"]), {})
-    prompt = f"""Ты — SMM-редактор ювелирного магазина. Напиши тексты к короткому вертикальному ролику ({v.get('duration')} сек).
+    from . import niches
+    c = niches.ctx(p.get("niche"))
+    prompt = f"""Ты — SMM-редактор магазина. Ниша: {c['name']} — {c.get('description','')[:300]}. Тон: {c.get('tone','')}. Напиши тексты к короткому вертикальному ролику ({v.get('duration')} сек).
 ИЗДЕЛИЕ: {p.get('name')} · цена {p.get('price') or 'не указана'} · промокод {p.get('promo') or 'нет'}
 Описание: {p.get('description_ru','')[:1200]}
 РОЛИК: {concept.get('title','')} — {concept.get('idea','')} · хук: {concept.get('hook','')}
-ТРЕНДЫ НЕДЕЛИ: {research.active_brief_text(900) or '(нет)'}
-ПРОФИЛЬ ВКУСА: {store.taste_text()[:800] or '(нет)'}
+ТРЕНДЫ НЕДЕЛИ: {research.active_brief_text(p.get('niche'), 900) or '(нет)'}
+ПРОФИЛЬ ВКУСА: {store.taste_text(p.get('niche'))[:800] or '(нет)'}
 
 Требования:
 - vk.text: 2–4 коротких предложения, живо, без канцелярита; призыв перейти по ссылке; промокод, если есть. Ссылку НЕ пиши — её вставит система.
 - telegram.text: чуть подробнее (до 600 знаков), можно 1–2 эмодзи, без ссылки.
-- youtube.title: до 70 знаков, с ключевым словом (кольцо, изумруд и т.п.), без кликбейта; youtube.description: 2–3 предложения без ссылки.
+- youtube.title: до 70 знаков, с ключевым словом (название товара, материал и т.п.), без кликбейта; youtube.description: 2–3 предложения без ссылки.
 - hashtags: 5–8 штук на русском, без пробелов, со знаком #.
 - cover_text: 2–4 слова для обложки.
 - Не обещай того, чего нет в описании (скидок, сертификатов, сроков). Не упоминай ИИ и нейросети.

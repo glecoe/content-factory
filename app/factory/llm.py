@@ -9,8 +9,33 @@ from .config import settings, MODELS, DEFAULT_NEGATIVE, int_setting
 from . import store
 
 
+def _nc(product) -> dict:
+    """Контекст ниши изделия."""
+    from . import niches
+    return niches.ctx((product or {}).get("niche"))
+
+
+def _jw(product) -> bool:
+    return _nc(product)["id"] == "jewelry"
+
+
+def _neg(product) -> str:
+    return DEFAULT_NEGATIVE if _jw(product) else _nc(product).get("negative_en") or DEFAULT_NEGATIVE
+
+
 class LLMError(RuntimeError):
     pass
+
+
+def gemini_hint(e) -> str:
+    """Понятная подсказка к частым ошибкам Gemini."""
+    msg = str(e)
+    if "location is not supported" in msg or "FAILED_PRECONDITION" in msg:
+        return (" — Google не пускает к Gemini API из этой страны. Включи VPN в режиме «для всей системы» "
+                "(не только в браузере) и перезапусти start.command.")
+    if "API_KEY_INVALID" in msg or "API key not valid" in msg:
+        return " — ключ Gemini неверный: вставь новый в «Настройках»."
+    return ""
 
 
 def gemini_available() -> bool:
@@ -67,7 +92,7 @@ def ask_gemini(parts, want_json=True, temperature=0.8):
                     break                      # такой модели нет — сразу к следующей
                 if any(m in msg for m in RETRY_MARKERS):
                     continue                   # перегрузка/лимит — подождать и повторить
-                raise LLMError(f"Gemini вернул ошибку: {e}") from e
+                raise LLMError(f"Gemini вернул ошибку: {e}{gemini_hint(e)}") from e
             text = (resp.text or "").strip()
             usage = getattr(resp, "usage_metadata", None)
             tokens = ((getattr(usage, "prompt_token_count", 0) or 0, getattr(usage, "candidates_token_count", 0) or 0)
@@ -110,7 +135,7 @@ def _retrying(call):
                     break
                 if any(m in msg for m in RETRY_MARKERS):
                     continue
-                raise LLMError(f"Gemini вернул ошибку: {e}") from e
+                raise LLMError(f"Gemini вернул ошибку: {e}{gemini_hint(e)}") from e
     raise LLMError(f"Gemini перегружен, попробуй позже. Последняя ошибка: {last}")
 
 
@@ -176,11 +201,12 @@ PASSPORT_SCHEMA = {"type": "object", "properties": {
 
 
 def passport(product: dict, photo_paths):
-    prompt = f"""You are a jewelry expert preparing a product passport for AI video generation.
+    c = _nc(product)
+    prompt = f"""You are a {c['product_en']} expert preparing a product passport for AI video generation (niche: {c['name']}).
 Look at the photos and read the product description (Russian). Describe ONLY what is visible and matters for faithful reproduction.
 Description: {product.get('description_ru','')}
 Return JSON: {{
- "visual_en": "one dense English sentence for video prompts: metal color, ring shape, center stone (shape, color, approx size), side stones layout (halo, pavé, count if few), band details",
+ "visual_en": "one dense English sentence for video prompts: {c['passport_en']}",
  "metal": "...", "center_stone": "...", "side_stones": "...", "band": "...",
  "risks": ["details a generative model is likely to distort"]
 }}"""
@@ -201,18 +227,41 @@ SHOT_RULES = """RULES FOR RING FIDELITY (most important):
 - Seedance reference prompts refer to photos as @Image1, @Image2… in the order of the listed sources."""
 
 
+GENERIC_RULES = """RULES FOR PRODUCT FIDELITY (most important):
+- The {p} is a rigid, unchanging object. Every prompt must restate its exact look (use the passport sentence) and say that its {fid} stay identical to the source image/video.
+- Minimal motion: slow tilt ≤ 15°, slow push-in, light sweeps. No fast moves, no flips, no hiding the {p}.
+- One action per shot. Close-up framing, shallow depth of field, focus locked on the key detail of the {p}.
+- Photorealistic {look} look. No text, no logos in the video (text is added at montage).
+- Kling edit prompts must refer to the source video as @Video1 and start with "Keep the {p} and the movement exactly as in @Video1".
+- Seedance reference prompts refer to photos as @Image1, @Image2… in the order of the listed sources."""
+
+
+def shot_rules(product) -> str:
+    if _jw(product):
+        return SHOT_RULES
+    c = _nc(product)
+    return GENERIC_RULES.format(p=c["product_en"], fid=c["fidelity_en"], look=c["look_en"])
+
+
 def build_brief(product: dict, n_concepts=None) -> str:
     n_concepts = n_concepts or max(1, min(8, int_setting("CONCEPTS_N", 3)))
     from . import research
-    trends = research.active_brief_text() or "(ресёрч трендов ещё не запускался — опирайся на профиль вкуса и общие правила)"
+    c = _nc(product)
+    jw = c["id"] == "jewelry"
+    P, U = c["product_ru"], c["use_ru"]
+    trends = research.active_brief_text(c["id"]) or "(ресёрч трендов ещё не запускался — опирайся на профиль вкуса и общие правила)"
     photos = product.get("photos", [])
-    src_lines = [f"photo:{i+1} — {ph.get('label') or 'фото кольца'}" for i, ph in enumerate(photos)]
+    src_lines = [f"photo:{i+1} — {ph.get('label') or 'фото ' + ('кольца' if jw else 'товара')}" for i, ph in enumerate(photos)]
     if product.get("video"):
-        src_lines.append("video — короткое видео кольца на руке (для Kling edit)")
+        src_lines.append("video — короткое видео " + ("кольца на руке" if jw else f"товара {U}") + " (для Kling edit)")
     models = "\n".join(f"- {k}: {m['title']}; needs {m['needs']}; durations {m['durations']}; ${m['usd_per_sec']}/sec; paths {','.join(m['paths'])}"
                        for k, m in MODELS.items())
-    taste = store.taste_text().strip() or "(пока нет — это первые ролики)"
-    return f"""Ты — сценарист контент-завода ювелирной рекламы. Придумай {n_concepts} концепта коротких роликов 9:16 (10–15 секунд) для соцсетей.
+    taste = store.taste_text(c["id"]).strip() or "(пока нет — это первые ролики)"
+    types = TYPES_JW if jw else TYPES_GEN.format(p=P, u=U)
+    struct = STRUCT_JW if jw else STRUCT_GEN.format(p=P, u=U)
+    return f"""Ты — сценарист контент-завода рекламных роликов. Придумай {n_concepts} концепта коротких роликов 9:16 (10–15 секунд) для соцсетей.
+
+{_niche_block(c)}
 
 ИЗДЕЛИЕ
 Название: {product.get('name','')}
@@ -227,10 +276,7 @@ def build_brief(product: dict, n_concepts=None) -> str:
 {models}
 
 ТИПЫ КАДРОВ
-A — макро / вращение / игра света (photo → kling_i2v, seedance_i2v или veo_i2v)
-B — кольцо на руке из видео сборщика (video → kling_edit) — самый надёжный для руки
-C — кольцо на ИИ-модели (photos → keyframe_kling: сначала фотореалистичный ключевой кадр Nano Banana 2 по фото кольца, потом оживление Kling; или photos → seedance_ref). Для keyframe_kling заполни keyframe_prompt — описание стоп-кадра (EN).
-D — атмосфера без кольца (photo → veo_i2v как настроение; используй редко)
+{types}
 
 ПРОФИЛЬ ВКУСА ВЛАДЕЛЬЦА
 {taste}
@@ -238,13 +284,11 @@ D — атмосфера без кольца (photo → veo_i2v как наст�
 ТРЕНДЫ НЕДЕЛИ (бриф ресёрчера)
 {trends}
 
-{SHOT_RULES}
+{shot_rules(product)}
 
 ТРЕБОВАНИЯ
 - СТРУКТУРА КАЖДОГО РОЛИКА — ровно 3 РАЗНЫХ кадра, потом монтажёр сам добавит финальную плашку:
-  1) красивый кадр из ФОТО (тип A): макро кольца, например медленный наезд на центральный камень;
-  2) второй красивый кадр из ДРУГОГО фото (тип A): другой ракурс и другое движение — облёт, проход света, отъезд;
-  3) кольцо на руке (тип B из video через kling_edit; если видео нет — тип C из фото).
+{struct}
   Два кадра из фото должны использовать разные photo:N и разные движения камеры. Порядок кадров выбирай сам под хук.
 - Около 70% концептов — по профилю вкуса, остальные — эксперимент (mode: "experiment"). Эксперименты строй на трендах недели.
 - В поле trend укажи, какой тренд/хук из брифа использован (или пусто).
@@ -254,7 +298,7 @@ D — атмосфера без кольца (photo → veo_i2v как наст�
 
 Ответь ТОЛЬКО JSON без пояснений:
 {{
- "visual_en": "паспорт кольца одной фразой на английском",
+ "visual_en": "паспорт товара одной фразой на английском",
  "concepts": [
   {{
    "title": "короткое название (RU)",
@@ -274,11 +318,35 @@ D — атмосфера без кольца (photo → veo_i2v как наст�
 
 
 
+TYPES_JW = """A — макро / вращение / игра света (photo → kling_i2v, seedance_i2v или veo_i2v)
+B — кольцо на руке из видео сборщика (video → kling_edit) — самый надёжный для руки
+C — кольцо на ИИ-модели (photos → keyframe_kling: сначала фотореалистичный ключевой кадр Nano Banana 2 по фото кольца, потом оживление Kling; или photos → seedance_ref). Для keyframe_kling заполни keyframe_prompt — описание стоп-кадра (EN).
+D — атмосфера без кольца (photo → veo_i2v как настроение; используй редко)"""
+TYPES_GEN = """A — крупный план / вращение / игра света на товаре ({p}) (photo → kling_i2v, seedance_i2v или veo_i2v)
+B — товар {u} из видео сборщика (video → kling_edit) — самый надёжный кадр «в использовании»
+C — товар {u} в ИИ-сцене (photos → keyframe_kling: сначала фотореалистичный ключевой кадр Nano Banana 2 по фото товара, потом оживление Kling; или photos → seedance_ref). Для keyframe_kling заполни keyframe_prompt — описание стоп-кадра (EN).
+D — атмосфера без товара (photo → veo_i2v как настроение; используй редко)"""
+STRUCT_JW = """  1) красивый кадр из ФОТО (тип A): макро кольца, например медленный наезд на центральный камень;
+  2) второй красивый кадр из ДРУГОГО фото (тип A): другой ракурс и другое движение — облёт, проход света, отъезд;
+  3) кольцо на руке (тип B из video через kling_edit; если видео нет — тип C из фото)."""
+STRUCT_GEN = """  1) красивый кадр из ФОТО (тип A): крупный план товара ({p}), например медленный наезд на главную деталь;
+  2) второй красивый кадр из ДРУГОГО фото (тип A): другой ракурс и другое движение — облёт, проход света, отъезд;
+  3) товар {u} (тип B из video через kling_edit; если видео нет — тип C из фото)."""
+
+
+def _niche_block(c) -> str:
+    if c["id"] == "jewelry":
+        return ""
+    return (f"НИША: {c.get('name')}\nЧто продаём: {c.get('description','')}\nАудитория: {c.get('audience','')}\n"
+            f"Тон: {c.get('tone','')}\nСтиль рекламы (EN): {c.get('look_en','')}\n")
+
+
 # ---------------------------------------------------------------------------
 # Шаблоны кадров и обязательная структура ролика: 2 кадра из фото + 1 на руке
 # ---------------------------------------------------------------------------
 def _ring(product):
-    return (product.get("visual_en") or "the ring from the image").strip().rstrip(".")
+    fallback = "the ring from the image" if _jw(product) else f"the {_nc(product)['product_en']} from the image"
+    return (product.get("visual_en") or fallback).strip().rstrip(".")
 
 
 PHOTO_MOVES = [
@@ -291,7 +359,23 @@ PHOTO_MOVES = [
 ]
 
 
+GEN_MOVES = [
+    ("slow close-up push-in toward the key detail, focus locked on it", "Soft warm light slowly glides across the surface."),
+    ("slow elegant orbit of about 15 degrees around the product, shallow depth of field", "A soft light sweep from left to right; deep rich shadows."),
+    ("slow pull-back revealing the whole product on a clean premium surface", "Soft natural light, gentle bokeh in the background."),
+]
+
+
 def photo_shot(product, photo_idx: int, move_idx: int) -> dict:
+    if not _jw(product):
+        c = _nc(product)
+        move, light = GEN_MOVES[move_idx % len(GEN_MOVES)]
+        item = _ring(product)
+        prompt = (f"{c['look_en'].capitalize()}, close-up of {item}. Camera: {move}. {light} The {c['product_en']} is a rigid, "
+                  f"unchanging object: its {c['fidelity_en']} stay exactly identical to the source image in every frame. "
+                  f"Do not redraw, reshape or reinterpret it. Clean background, photorealistic, smooth motion, no text, no logo.")
+        return {"type": "A", "model": "kling_i2v", "source": f"photo:{photo_idx}", "duration": 5,
+                "prompt": prompt, "negative_prompt": _neg(product)}
     move, light = PHOTO_MOVES[move_idx % len(PHOTO_MOVES)]
     ring = _ring(product)
     prompt = (f"Luxury jewelry commercial, extreme close-up macro of {ring}. Camera: {move}. {light} "
@@ -303,6 +387,20 @@ def photo_shot(product, photo_idx: int, move_idx: int) -> dict:
 
 
 def hand_shot(product) -> dict:
+    if not _jw(product):
+        c = _nc(product)
+        item = _ring(product)
+        if product.get("video"):
+            prompt = (f"Keep the {c['product_en']} and the movement exactly as in @Video1. Do not change the {c['product_en']} in any way: "
+                      f"{item} keeps the same {c['fidelity_en']}. Change only: the scene becomes premium and clean, soft flattering "
+                      f"light, tidy background with gentle bokeh, people look well-groomed. Photorealistic {c['look_en']}.")
+            return {"type": "B", "model": "kling_edit", "source": "video", "duration": 5, "prompt": prompt,
+                    "negative_prompt": _neg(product)}
+        prompt = (f"{c['model_en'].capitalize()}, with {item} {c['use_en']}, the exact {c['product_en']} from @Image1 — identical "
+                  f"{c['fidelity_en']}. Minimal slow movement toward the camera. Static camera, shallow depth of field, soft light. "
+                  f"Photorealistic {c['look_en']}.")
+        return {"type": "C", "model": "seedance_ref", "source": "photos", "duration": 5, "prompt": prompt,
+                "negative_prompt": _neg(product)}
     ring = _ring(product)
     if product.get("video"):
         prompt = (f"Keep the ring and the hand movement exactly as in @Video1. Do not change the ring in any way: {ring} keeps the "
@@ -320,6 +418,11 @@ def hand_shot(product) -> dict:
 
 
 def keyframe_default(product) -> str:
+    if not _jw(product):
+        c = _nc(product)
+        return (f"Photorealistic vertical 9:16 advertising photo ({c['look_en']}): {c['model_en']}, with {_ring(product)} "
+                f"{c['use_en']} — the exact {c['product_en']} from the reference photos, identical {c['fidelity_en']}. "
+                f"Soft flattering light, shallow depth of field, clean premium background. No text.")
     return (f"Photorealistic vertical 9:16 luxury jewelry advertising photo: close-up of a young woman's elegant hand with "
             f"a nude manicure, wearing {_ring(product)} on the ring finger — the exact ring from the reference photos, "
             f"identical geometry, stones, colors and proportions, realistic size on the finger. Soft warm key light, "
@@ -364,9 +467,13 @@ def template_concept(product: dict, n: int = 1) -> dict:
     photos = max(len(product.get("photos", [])), 1)
     a1 = photo_shot(product, 1, n - 1)
     a2 = photo_shot(product, 2 if photos > 1 else 1, n)
-    return {"title": f"Шаблон: макро + рука + ракурс #{n}",
-            "idea": "Два красивых кадра из фото и кольцо на руке, в конце плашка с ценой и промокодом.",
-            "mode": "taste", "hook": "Медленный наезд на камень", "music_mood": "спокойная дорогая музыка",
+    jw = _jw(product)
+    u = _nc(product)["use_ru"]
+    return {"title": f"Шаблон: макро + {'рука' if jw else u} + ракурс #{n}",
+            "idea": ("Два красивых кадра из фото и кольцо на руке" if jw else f"Два красивых кадра из фото и товар {u}") +
+                    ", в конце плашка с ценой и промокодом.",
+            "mode": "taste", "hook": "Медленный наезд на камень" if jw else "Медленный наезд на главную деталь",
+            "music_mood": "спокойная дорогая музыка",
             "shots": [a1, hand_shot(product), a2]}
 
 def normalize_concepts(data: dict, product: dict) -> dict:
@@ -400,9 +507,10 @@ def normalize_concepts(data: dict, product: dict) -> dict:
             dur = min(allowed, key=lambda d: abs(d - float(dur)))
             prompt = (s.get("prompt") or "").strip()
             if model == "kling_edit" and "@Video1" not in prompt:
-                prompt = "Keep the ring and the hand movement exactly as in @Video1. " + prompt
+                prompt = ("Keep the ring and the hand movement exactly as in @Video1. " if _jw(product) else
+                          f"Keep the {_nc(product)['product_en']} and the movement exactly as in @Video1. ") + prompt
             sh = {"type": s.get("type", "A"), "model": model, "source": src, "duration": dur,
-                  "prompt": prompt, "negative_prompt": s.get("negative_prompt") or DEFAULT_NEGATIVE}
+                  "prompt": prompt, "negative_prompt": s.get("negative_prompt") or _neg(product)}
             if model == "keyframe_kling":
                 sh["keyframe_prompt"] = (s.get("keyframe_prompt") or "").strip() or keyframe_default(product)
             shots.append(sh)
@@ -432,7 +540,7 @@ SCENARIO_SCHEMA = {"type": "object", "properties": {
     "required": ["concepts"]}
 
 
-def scenario_auto(product: dict, photo_paths, job=None, n_concepts=None):
+def scenario_auto(product: dict, photo_paths, job=None, n_concepts=None):  # noqa: D401
     from . import brains
     brief = build_brief(product, n_concepts)
     data, meta = brains.ask("scenario", brief, images=list(photo_paths)[:4], schema=SCENARIO_SCHEMA,
@@ -457,7 +565,15 @@ def qa_available() -> bool:
 
 
 def qa_clip(product: dict, ref_photos, frames):
-    prompt = f"""You are a strict jewelry QA inspector. The first {len(ref_photos)} images are REFERENCE photos of the real ring.
+    if not _jw(product):
+        c = _nc(product)
+        prompt = f"""You are a strict product QA inspector. The first {len(ref_photos)} images are REFERENCE photos of the real {c['product_en']}.
+The next {len(frames)} images are frames from an AI-generated video that must show exactly the same {c['product_en']}.
+Product passport: {product.get('visual_en') or product.get('description_ru','')}
+Check: 1) {c['fidelity_en']} identical to the reference, 2) no extra or missing parts, labels not warped, 3) realistic scale and use ({c['use_en']}), 4) people/hands anatomy if present, 5) artifacts/flicker/text.
+Return JSON: {{"verdict": "ok" | "reject", "score": 0-100, "issues_ru": ["короткие причины на русском"], "summary_ru": "одна фраза"}}"""
+    else:
+        prompt = f"""You are a strict jewelry QA inspector. The first {len(ref_photos)} images are REFERENCE photos of the real ring.
 The next {len(frames)} images are frames from an AI-generated video that must show exactly the same ring.
 Ring passport: {product.get('visual_en') or product.get('description_ru','')}
 Check: 1) ring shape/proportions, 2) center stone shape, size and color, 3) side stones (halo/pavé) present and small, 4) metal color, 5) ring size relative to finger, 6) hand anatomy (five natural fingers), 7) artifacts/flicker/text.
@@ -476,8 +592,9 @@ Return JSON: {{"verdict": "ok" | "reject", "score": 0-100, "issues_ru": ["кор
 # ---------------------------------------------------------------------------
 # Профиль вкуса
 # ---------------------------------------------------------------------------
-def taste_update(rows, current: str):
-    prompt = f"""Ты ведёшь профиль вкуса владельца контент-завода ювелирных роликов.
+def taste_update(rows, current: str, niche: str | None = None):
+    from . import niches
+    prompt = f"""Ты ведёшь профиль вкуса владельца контент-завода рекламных роликов. Ниша: {niches.ctx(niche).get('name')}.
 Текущий профиль:
 {current or '(пусто)'}
 

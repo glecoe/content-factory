@@ -23,6 +23,10 @@ class GenError(RuntimeError):
 
 # модели, которые берут один стартовый кадр и отдают видео в его пропорциях
 PHOTO_START_MODELS = {"kling_i2v", "seedance_i2v", "veo_i2v"}
+VERTICAL_GENERIC = (
+    "Extend this product photo to a vertical 9:16 frame. Keep the {p}, its shape, colors, details, the lighting and the "
+    "camera angle exactly as they are — do not redraw, move or resize it. Only extend the background naturally "
+    "above and below in the same style, colors and lighting. Photorealistic, no text, no logo.")
 VERTICAL_PROMPT = (
     "Extend this jewelry photo to a vertical 9:16 frame. Keep the ring, the stones, the metal, the lighting and the "
     "camera angle exactly as they are — do not redraw, move or resize the ring. Only extend the background naturally "
@@ -53,7 +57,7 @@ def _src_files(product, pdir: Path, source: str):
     photos = [pdir / "prepared" / ph["file"] for ph in product.get("photos", [])]
     if source == "video":
         if not product.get("video"):
-            raise GenError("Для кадра B нужно видео кольца на руке — загрузи его на шаге «Изделие».")
+            raise GenError("Для кадра B нужно видео товара в использовании — загрузи его на шаге «Изделие».")
         return [pdir / "prepared" / product["video"]["file"]]
     if not photos:
         raise GenError("Нет фото изделия.")
@@ -135,7 +139,10 @@ def vertical_start(job, product, pdir: Path, photo: Path) -> Path:
             return out
         try:
             job.say(f"  делаю вертикальный стартовый кадр из {photo.name} (Nano Banana 2, ~${NB2_USD['1K']:.2f})…")
-            return _nb2(job, product, VERTICAL_PROMPT, [photo], out, resolution="1K")
+            from . import niches
+            c = niches.ctx(product.get("niche"))
+            vp = VERTICAL_PROMPT if c["id"] == "jewelry" else VERTICAL_GENERIC.format(p=c["product_en"])
+            return _nb2(job, product, vp, [photo], out, resolution="1K")
         except Exception as e:
             job.say(f"  дорисовать не вышло ({str(e)[:160]}) — кладу фото на размытый фон")
     out = vdir / f"{photo.stem}_9x16_blur.jpg"
@@ -251,6 +258,13 @@ HERO_PROMPT = ("Luxury jewelry advertising photograph, vertical 9:16. The ring i
                "Editorial, photorealistic, high-end catalog quality. No text, no letters, no logo, no watermark, no hands, no people.")
 
 
+HERO_GENERIC = ("Premium advertising photograph, vertical 9:16, {look}. The {p} is an exact copy of the {p} in the reference "
+                "photos: identical {fid} — do not redesign it. {item}. Scene: the {p} {scene}. Composition: the {p} slightly "
+                "above the center, about one third of the frame width, sharp focus, shallow depth of field. Keep the top fifth "
+                "and the bottom third of the frame calm and uncluttered — that space is reserved for typography. Photorealistic, "
+                "high-end catalog quality. No text, no letters, no logo, no watermark.")
+
+
 def make_heroes(job, product, pdir: Path, styles: list[str]) -> list[str]:
     """Красивые фото кольца для финального кадра (Nano Banana 2 по фото изделия). Возвращает имена файлов в cards/."""
     photos = [pdir / "prepared" / ph["file"] for ph in product.get("photos", [])]
@@ -258,7 +272,9 @@ def make_heroes(job, product, pdir: Path, styles: list[str]) -> list[str]:
         raise GenError("Сначала загрузи фото изделия.")
     cards = pdir / "cards"
     cards.mkdir(parents=True, exist_ok=True)
-    ring = (product.get("visual_en") or "").strip().rstrip(".") or "the ring from the reference photos"
+    from . import niches
+    c = niches.ctx(product.get("niche"))
+    ring = (product.get("visual_en") or "").strip().rstrip(".") or f"the {c['product_en']} from the reference photos"
     out = []
     if not demo_mode():
         _check_limit(NB2_USD["2K"] * len(styles))
@@ -269,7 +285,9 @@ def make_heroes(job, product, pdir: Path, styles: list[str]) -> list[str]:
             job.say(f"  [демо] «{title}»: беру фото изделия на размытом фоне, $0")
             media.vertical_blur_image(photos[k % len(photos)], f)
         else:
-            job.say(f"  «{title}»: Nano Banana 2 снимает кольцо (~${NB2_USD['2K']:.2f})…")
-            _nb2(job, product, HERO_PROMPT.format(ring=ring, scene=scene), photos[:4], f, resolution="2K")
+            job.say(f"  «{title}»: Nano Banana 2 снимает {c['product_ru']} (~${NB2_USD['2K']:.2f})…")
+            hp = HERO_PROMPT.format(ring=ring, scene=scene) if c["id"] == "jewelry" else HERO_GENERIC.format(
+                p=c["product_en"], item=ring, scene=scene, fid=c["fidelity_en"], look=c["look_en"])
+            _nb2(job, product, hp, photos[:4], f, resolution="2K")
         out.append(f.name)
     return out

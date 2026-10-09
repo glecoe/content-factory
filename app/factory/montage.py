@@ -170,8 +170,10 @@ def ai_plan(job, product, concept, clips_by_shot, n_variants=2):
         shots.append({"index": i, "type": c["type"], "duration": c["duration"], "model": c["model"],
                       "prompt": (sh.get("prompt") or c.get("prompt") or "")[:400],
                       "qa_score": q.get("score"), "qa_issues": q.get("issues_ru", [])})
-    liked = [r for r in store.ratings() if r.get("like")][-8:]
-    prompt = f"""Ты — монтажёр коротких рекламных роликов украшений (вертикаль 9:16, 10–15 секунд, в конце плашка с ценой 2.5 с — её добавят сами).
+    nid = product.get("niche")
+    from . import niches
+    liked = [r for r in store.ratings(nid) if r.get("like")][-8:]
+    prompt = f"""Ты — монтажёр коротких рекламных роликов, ниша «{niches.ctx(nid)['name']}» (вертикаль 9:16, 10–15 секунд, в конце плашка с ценой 2.5 с — её добавят сами).
 Сделай {n_variants} РАЗНЫХ варианта монтажа одного концепта.
 
 КОНЦЕПТ: {concept.get('title')} — {concept.get('idea')}
@@ -184,11 +186,11 @@ def ai_plan(job, product, concept, clips_by_shot, n_variants=2):
 ПЕРЕХОДЫ: {', '.join(TRANSITIONS)}
 
 ПРОФИЛЬ ВКУСА:
-{store.taste_text()[:1800] or '(пусто)'}
+{store.taste_text(nid)[:1800] or '(пусто)'}
 
 ПОНРАВИВШИЕСЯ РАНЕЕ МОНТАЖИ: {json.dumps([{k: r.get(k) for k in ('variant', 'music', 'tags', 'comment')} for r in liked], ensure_ascii=False)}
 
-ТРЕНДЫ: {research.active_brief_text(1200) or '(нет брифа)'}
+ТРЕНДЫ: {research.active_brief_text(nid, 1200) or '(нет брифа)'}
 
 Правила: order — все index клипов в нужном порядке (каждый ровно один раз); lengths — длина каждого клипа в секундах (2.5–5, не больше его duration), в порядке order;
 starts — с какой секунды брать клип (0, если начало хорошее); transitions — переход ПЕРЕД каждым следующим фрагментом (их число = число клипов, последний — перед плашкой);

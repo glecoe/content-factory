@@ -21,7 +21,7 @@ class BrainError(RuntimeError):
     pass
 
 
-SYSTEM = ("Ты — агент контент-завода ювелирной рекламы. Работаешь в конвейере без человека рядом: "
+SYSTEM = ("Ты — агент студии: контент-завод рекламных роликов и лаборатория сайтов. Работаешь в конвейере без человека рядом: "
           "не задавай вопросов, не проси подтверждений, сразу выполняй задание. Отвечай по-русски, "
           "промты для видеомоделей пиши по-английски. Если задан формат ответа — строго соблюдай его.")
 
@@ -73,11 +73,18 @@ def claude_status(force=False) -> dict:
             try:
                 j = json.loads(r.stdout or "{}")
                 st["method"] = j.get("authMethod")
-                st["logged_in"] = r.returncode == 0 and j.get("authMethod") not in (None, "none")
+                if "loggedIn" in j:
+                    st["logged_in"] = bool(j["loggedIn"])
+                else:
+                    st["logged_in"] = r.returncode == 0 and j.get("authMethod") not in (None, "none")
                 st["email"] = j.get("email") or (j.get("account") or {}).get("email")
             except json.JSONDecodeError:
-                st["logged_in"] = r.returncode == 0
-                st["method"] = "unknown"
+                # старые версии без `auth status`: считаем, что вход есть, ошибку покажет сам запрос
+                st["logged_in"] = True
+                st["method"] = "не проверить"
+            if settings().get("CLAUDE_CODE_OAUTH_TOKEN", "").strip():
+                st["logged_in"] = True
+                st["method"] = st["method"] or "token"
         except Exception as e:  # noqa
             st["error"] = str(e)
     _status_cache.update(t=time.time(), v=st)
@@ -141,7 +148,9 @@ def ask_claude(prompt: str, images=None, schema: dict | None = None, web=False, 
         msg = j.get("result") or j.get("subtype") or r.stderr
         hint = ""
         low = str(msg).lower()
-        if "login" in low or "auth" in low or "401" in low:
+        if "region" in low or "country" in low or "403" in low or "not available" in low:
+            hint = " Похоже, Anthropic не пускает из этой страны: включи VPN для всей системы и перезапусти start.command."
+        elif "login" in low or "auth" in low or "401" in low:
             hint = " Похоже, не выполнен вход: открой Терминал и запусти claude (или вставь токен setup-token в Настройках)."
         elif "limit" in low or "usage" in low:
             hint = " Похоже, исчерпан лимит подписки — дождись сброса или переключи роль на Gemini."
@@ -155,6 +164,99 @@ def ask_claude(prompt: str, images=None, schema: dict | None = None, web=False, 
             data = parse_json(j.get("result") or "")
         return data, meta
     return (j.get("result") or "").strip(), meta
+
+
+class ClaudeCodeStopped(BrainError):
+    """Сессия Claude Code остановлена по лимиту (время, простой, шаги) — работа в папке сохранена, её можно продолжить."""
+    def __init__(self, msg, reason="", files=None, steps=0, seconds=0):
+        super().__init__(msg)
+        self.reason, self.files, self.steps, self.seconds = reason, sorted(files or []), steps, seconds
+
+
+def run_claude_code(job, prompt: str, cwd: Path, tools=("Read", "Write", "Edit", "Glob", "Grep"),
+                    max_turns=120, timeout=3600, model=None, idle=900) -> dict:
+    """Claude Code как разработчик: работает с файлами в папке cwd, журнал действий идёт в задачу.
+    Использует подписку (OAuth), как и остальные роли.
+    Сторож останавливает сессию по общему времени (timeout) или если Claude молчит дольше idle секунд."""
+    import threading
+    b = claude_bin()
+    if not b:
+        raise BrainError("Claude Code не установлен. Установи: curl -fsSL https://claude.ai/install.sh | bash, затем войди командой claude.")
+    cmd = [b, "-p", prompt, "--output-format", "stream-json", "--verbose", "--no-session-persistence",
+           "--append-system-prompt", SYSTEM, "--tools", ",".join(tools), "--allowedTools", ",".join(tools),
+           "--permission-mode", "acceptEdits", "--strict-mcp-config", "--max-turns", str(max_turns)]
+    model = model or (settings().get("CLAUDE_MODEL") or "").strip()
+    if model:
+        cmd += ["--model", model, "--fallback-model", "haiku" if model == "sonnet" else "sonnet"]
+    t0 = time.time()
+    proc = subprocess.Popen(cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                            env=_claude_env(), stdin=subprocess.DEVNULL, bufsize=1)
+    state = {"last": time.time(), "stop": None}
+
+    def watchdog():
+        while proc.poll() is None:
+            now = time.time()
+            if now - t0 > timeout:
+                state["stop"] = "timeout"
+            elif now - state["last"] > idle:
+                state["stop"] = "idle"
+            if state["stop"]:
+                proc.kill()
+                return
+            time.sleep(5)
+    threading.Thread(target=watchdog, daemon=True).start()
+
+    result, files, last_text, steps = None, set(), "", 0
+    try:
+        for line in proc.stdout:
+            state["last"] = time.time()
+            line = line.strip()
+            if not line.startswith("{"):
+                continue
+            try:
+                ev = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if ev.get("type") == "assistant":
+                for c in (ev.get("message") or {}).get("content", []):
+                    if c.get("type") == "tool_use":
+                        steps += 1
+                        inp = c.get("input") or {}
+                        fp = inp.get("file_path") or inp.get("path") or inp.get("pattern") or ""
+                        if c.get("name") in ("Write", "Edit", "MultiEdit") and fp:
+                            files.add(fp)
+                        name = {"Write": "пишет", "Edit": "правит", "MultiEdit": "правит", "Read": "читает",
+                                "Glob": "ищет", "Grep": "ищет"}.get(c.get("name"), c.get("name"))
+                        rel = str(fp).replace(str(cwd), "").lstrip("/")
+                        job.say(f"  Claude {name} {rel}"[:160])
+                    elif c.get("type") == "text" and c.get("text", "").strip():
+                        last_text = c["text"].strip()
+            elif ev.get("type") == "result":
+                result = ev
+    finally:
+        try:
+            proc.wait(timeout=30)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+    secs = round(time.time() - t0)
+    rel_files = [str(f).replace(str(cwd), "").lstrip("/") for f in files]
+    if state["stop"]:
+        why = {"timeout": f"время сессии вышло ({timeout // 60} мин)",
+               "idle": f"Claude молчал больше {idle // 60} мин"}[state["stop"]]
+        raise ClaudeCodeStopped(f"Claude Code остановлен: {why}. Сделанное сохранено.", state["stop"], rel_files, steps, secs)
+    if not result:
+        err = (proc.stderr.read() if proc.stderr else "")[-800:]
+        raise BrainError(f"Claude Code завершился без результата (код {proc.returncode}): {err}")
+    if result.get("subtype") == "error_max_turns":
+        raise ClaudeCodeStopped("Claude Code остановлен: закончились шаги сессии. Сделанное сохранено.", "max_turns",
+                                rel_files, steps, secs)
+    if result.get("is_error") or result.get("subtype") not in (None, "success"):
+        msg = str(result.get("result") or result.get("subtype"))
+        raise BrainError(f"Claude Code: {msg[:600]}")
+    store.log_cost("llm", 0.0, "", f"site build via claude, {result.get('num_turns')} шагов, "
+                                   f"≈${float(result.get('total_cost_usd') or 0):.2f} по прайсу API (по подписке)")
+    return {"summary": (result.get("result") or last_text or "").strip(), "files": rel_files,
+            "turns": result.get("num_turns"), "seconds": secs}
 
 
 # ----------------------------------------------------------------------------- маршрутизатор
@@ -185,7 +287,12 @@ def ask(role: str, prompt: str, images=None, schema: dict | None = None, web=Fal
     errors = []
     for name in order:
         if not available(name):
-            errors.append(f"{name}: не подключён")
+            if name == "claude":
+                cs = claude_status(force=True)
+                errors.append("claude: " + ("не установлен (curl -fsSL https://claude.ai/install.sh | bash)" if not cs["installed"]
+                                            else "не выполнен вход — в Терминале набери claude и войди, потом «Настройки → Обновить статус»"))
+            else:
+                errors.append("gemini: нет ключа")
             continue
         try:
             if job:

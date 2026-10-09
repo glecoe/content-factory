@@ -3,29 +3,14 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Контент-завод</title>
+<title>Студия</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,500;0,600;1,500&family=Onest:wght@300;400;500;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,500;0,600;1,500&family=Onest:wght@300;400;500;600&family=Unbounded:wght@500;600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/static/style.css">
 </head>
-<body>
+<body data-mode="factory">
 <div class="app">
-  <aside class="rail">
-    <div class="brand">
-      <div class="brand-name">Контент-завод</div>
-      <div class="brand-sub">прототип · агенты</div>
-    </div>
-    <div class="mode" id="mode"></div>
-    <button class="btn primary wide" id="newProduct">Добавить изделие</button>
-    <nav class="products" id="products"></nav>
-    <nav class="railnav">
-      <button data-page="research">Тренды недели</button>
-      <button data-page="taste">Профиль вкуса</button>
-      <button data-page="costs">Расходы</button>
-      <button data-page="settings">Настройки</button>
-    </nav>
-  </aside>
-
+  <aside class="rail" id="rail"></aside>
   <main class="main">
     <header class="top" id="top"></header>
     <section id="view" class="view"></section>
@@ -36,5 +21,7 @@
 <div class="toast" id="toast" role="status"></div>
 <canvas id="endcardCanvas" width="1080" height="1920" hidden></canvas>
 <script src="/static/app.js"></script>
+<script src="/static/sites.js"></script>
+<script src="/static/shell.js"></script>
 </body>
 </html>

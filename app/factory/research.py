@@ -19,11 +19,12 @@ from pathlib import Path
 from .config import RESEARCH, settings
 from . import store
 
-CONFIG = RESEARCH / "config.json"
-BREAKDOWNS = RESEARCH / "breakdowns.json"
-BRIEFS = RESEARCH / "briefs"
-REFS = RESEARCH / "refs"
-ACTIVE = RESEARCH / "active.txt"
+# Всё хранится внутри ниши: data/niches/<id>/research/
+def _paths(nid):
+    from . import niches
+    d = niches.research_dir(niches.resolve(nid))
+    return {"config": d / "config.json", "breakdowns": d / "breakdowns.json", "briefs": d / "briefs",
+            "refs": d / "refs", "active": d / "active.txt"}
 
 DEFAULT_CONFIG = {
     "niche": "Ювелирные украшения: кольца с драгоценными камнями (изумруд, бриллианты), золото 585. Продажа через свой интернет-магазин.",
@@ -80,18 +81,26 @@ BRIEF_SCHEMA = {"type": "object", "properties": {
 
 
 # ----------------------------------------------------------------------------- конфиг и хранилище
-def load_config() -> dict:
-    if CONFIG.exists():
+def load_config(nid=None) -> dict:
+    from . import niches
+    nid = niches.resolve(nid)
+    f = _paths(nid)["config"]
+    base = dict(DEFAULT_CONFIG)
+    if nid != "jewelry":        # для новых ниш — из контекста ниши
+        n = niches.ctx(nid)
+        base.update({"niche": n.get("description") or n.get("name"), "audience": n.get("audience", ""),
+                     "markets": n.get("markets", ""), "competitors": "", "keywords": ""})
+    if f.exists():
         try:
-            c = json.loads(CONFIG.read_text(encoding="utf-8"))
-            return {**DEFAULT_CONFIG, **c}
+            base.update(json.loads(f.read_text(encoding="utf-8")))
         except Exception:
             pass
-    return dict(DEFAULT_CONFIG)
+    base["_nid"] = nid
+    return base
 
 
-def save_config(c: dict) -> dict:
-    cur = load_config()
+def save_config(nid, c: dict) -> dict:
+    cur = load_config(nid)
     for k in DEFAULT_CONFIG:
         if k in c:
             cur[k] = c[k]
@@ -100,37 +109,39 @@ def save_config(c: dict) -> dict:
             cur["apify_tasks"] = json.loads(cur["apify_tasks"] or "[]")
         except json.JSONDecodeError as e:
             raise ValueError(f"Задачи Apify — неверный JSON: {e}")
-    CONFIG.write_text(json.dumps(cur, ensure_ascii=False, indent=2), encoding="utf-8")
+    _paths(nid)["config"].write_text(json.dumps({k: v for k, v in cur.items() if k != "_nid"}, ensure_ascii=False, indent=2),
+                                     encoding="utf-8")
     return cur
 
 
-def _breakdowns() -> dict:
-    if BREAKDOWNS.exists():
+def _breakdowns(nid=None) -> dict:
+    f = _paths(nid)["breakdowns"]
+    if f.exists():
         try:
-            return json.loads(BREAKDOWNS.read_text(encoding="utf-8"))
+            return json.loads(f.read_text(encoding="utf-8"))
         except Exception:
             return {}
     return {}
 
 
-def _save_breakdowns(b):
-    BREAKDOWNS.write_text(json.dumps(b, ensure_ascii=False, indent=2), encoding="utf-8")
+def _save_breakdowns(nid, b):
+    _paths(nid)["breakdowns"].write_text(json.dumps(b, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def list_refs():
-    return sorted([p.name for p in REFS.iterdir() if p.suffix.lower() in (".mp4", ".mov", ".m4v", ".webm")])
+def list_refs(nid=None):
+    return sorted([p.name for p in _paths(nid)["refs"].iterdir() if p.suffix.lower() in (".mp4", ".mov", ".m4v", ".webm")])
 
 
-def add_ref(filename: str, data: bytes) -> str:
+def add_ref(nid, filename: str, data: bytes) -> str:
     safe = "".join(ch for ch in Path(filename).name if ch.isalnum() or ch in "._-") or "ref.mp4"
-    out = REFS / f"{int(time.time())}_{safe}"
+    out = _paths(nid)["refs"] / f"{int(time.time())}_{safe}"
     out.write_bytes(data)
     return out.name
 
 
-def list_briefs():
+def list_briefs(nid=None):
     out = []
-    for f in sorted(BRIEFS.glob("*.json"), reverse=True):
+    for f in sorted(_paths(nid)["briefs"].glob("*.json"), reverse=True):
         try:
             b = json.loads(f.read_text(encoding="utf-8"))
             out.append({"id": f.stem, "created": b.get("created"), "summary": (b.get("brief") or {}).get("summary_ru", "")[:240]})
@@ -139,31 +150,32 @@ def list_briefs():
     return out
 
 
-def load_brief(bid: str) -> dict:
+def load_brief(nid, bid: str) -> dict:
     if not bid.replace("_", "").replace("-", "").isalnum():
         raise ValueError("bad brief id")
-    return json.loads((BRIEFS / f"{bid}.json").read_text(encoding="utf-8"))
+    return json.loads((_paths(nid)["briefs"] / f"{bid}.json").read_text(encoding="utf-8"))
 
 
-def active_id() -> str:
-    if ACTIVE.exists():
-        v = ACTIVE.read_text().strip()
-        if (BRIEFS / f"{v}.json").exists():
+def active_id(nid=None) -> str:
+    P = _paths(nid)
+    if P["active"].exists():
+        v = P["active"].read_text().strip()
+        if (P["briefs"] / f"{v}.json").exists():
             return v
-    b = list_briefs()
+    b = list_briefs(nid)
     return b[0]["id"] if b else ""
 
 
-def set_active(bid: str):
-    load_brief(bid)
-    ACTIVE.write_text(bid)
+def set_active(nid, bid: str):
+    load_brief(nid, bid)
+    _paths(nid)["active"].write_text(bid)
 
 
-def active_brief_text(max_chars=3500) -> str:
-    bid = active_id()
+def active_brief_text(nid=None, max_chars=3500) -> str:
+    bid = active_id(nid)
     if not bid:
         return ""
-    b = load_brief(bid).get("brief") or {}
+    b = load_brief(nid, bid).get("brief") or {}
     lines = [f"Бриф от {bid}: {b.get('summary_ru','')}"]
     if b.get("top_trends"):
         lines.append("Тренды: " + "; ".join(f"{t.get('title')} — {t.get('how_to_use','')}" for t in b["top_trends"][:6]))
@@ -189,7 +201,7 @@ def active_brief_text(max_chars=3500) -> str:
 def web_scan(job, cfg) -> dict:
     from . import brains
     today = datetime.now().strftime("%d.%m.%Y")
-    prompt = f"""Сегодня {today}. Ты — ресёрчер трендов коротких видео для ювелирного бренда.
+    prompt = f"""Сегодня {today}. Ты — ресёрчер трендов коротких видео для бренда этой ниши.
 Ниша: {cfg['niche']}
 Аудитория: {cfg['audience']}
 Рынки: {cfg['markets']}
@@ -197,7 +209,7 @@ def web_scan(job, cfg) -> dict:
 Конкуренты (посмотри, что они публикуют и рекламируют): {cfg['competitors'].replace(chr(10), ', ')}
 Ключевые слова: {cfg['keywords']}
 
-Найди в интернете (поиск + чтение страниц), что СЕЙЧАС (последние 30–60 дней) работает в коротких вертикальных роликах и рекламе украшений, особенно колец:
+Найди в интернете (поиск + чтение страниц), что СЕЙЧАС (последние 30–60 дней) работает в коротких вертикальных роликах и рекламе товаров этой ниши:
 - визуальные тренды (свет, фоны, цвета металла и камней, стилистика: quiet luxury, macro, ASMR и т.п.);
 - форматы роликов и хуки первых 2 секунд;
 - что делают конкуренты в соцсетях и рекламе;
@@ -213,15 +225,16 @@ def web_scan(job, cfg) -> dict:
 
 def breakdown_refs(job, cfg, items=None, force=False) -> list:
     from . import llm
-    cache = _breakdowns()
+    nid = cfg.get("_nid")
+    cache = _breakdowns(nid)
     out = []
     if items is None:
         links = [l.strip() for l in (cfg.get("reference_links") or "").splitlines() if l.strip().startswith("http")]
-        items = [("url", l) for l in links] + [("file", f) for f in list_refs()]
+        items = [("url", l) for l in links] + [("file", f) for f in list_refs(nid)]
     if items and not llm.gemini_available():
         job.say("  разбор роликов пропущен: нужен ключ Gemini (он смотрит видео)")
         return []
-    prompt = ("Ты разбираешь короткий рекламный/контентный ролик для ювелирного бренда. Посмотри видео целиком и верни JSON:\n"
+    prompt = (f"Ты разбираешь короткий рекламный/контентный ролик для бренда. Ниша: {cfg.get('niche','')}. Посмотри видео целиком и верни JSON:\n"
               + BREAKDOWN_SCHEMA_TEXT)
     for kind, ref in items:
         key = ref if kind == "url" else "file:" + ref
@@ -236,11 +249,11 @@ def breakdown_refs(job, cfg, items=None, force=False) -> list:
                     continue
                 res = llm.gemini_video(prompt, url=ref)
             else:
-                res = llm.gemini_video(prompt, path=REFS / ref)
+                res = llm.gemini_video(prompt, path=_paths(nid)["refs"] / ref)
             res["ref"] = ref
             res["analyzed"] = datetime.now().isoformat(timespec="seconds")
             cache[key] = res
-            _save_breakdowns(cache)
+            _save_breakdowns(nid, cache)
             out.append(res)
         except Exception as e:
             job.say(f"    не получилось: {str(e)[:200]}")
@@ -315,14 +328,15 @@ def run_apify(job, cfg) -> list:
 
 def synthesize(job, cfg, web, breakdowns, apify) -> dict:
     from . import brains
-    prev = active_brief_text(1500)
+    nid = cfg.get("_nid")
+    prev = active_brief_text(nid, 1500)
     apify_txt = json.dumps(apify, ensure_ascii=False)[:30000] if apify else "(нет)"
-    prompt = f"""Ты — креативный стратег контент-завода ювелирной рекламы. Собери БРИФ НЕДЕЛИ для сценариста.
+    prompt = f"""Ты — креативный стратег контент-завода рекламных роликов. Собери БРИФ НЕДЕЛИ для сценариста.
 Ниша: {cfg['niche']}
 Аудитория: {cfg['audience']}
 
 ПРОФИЛЬ ВКУСА ВЛАДЕЛЬЦА (учитывай, но 30% роликов — эксперименты по трендам):
-{store.taste_text()[:2500] or '(пусто)'}
+{store.taste_text(nid)[:2500] or '(пусто)'}
 
 ПРЕДЫДУЩИЙ БРИФ (не повторяй дословно, отметь, что изменилось):
 {prev or '(нет)'}
@@ -336,15 +350,16 @@ def synthesize(job, cfg, web, breakdowns, apify) -> dict:
 ДАННЫЕ СБОРЩИКОВ (Apify: реальные ролики из соцсетей, отсортированы по просмотрам — ищи в них повторяющиеся приёмы, хуки, музыку, длительность):
 {apify_txt}
 
-ОГРАНИЧЕНИЯ ПРОИЗВОДСТВА: ролики 10–15 сек, 3 кадра (2 из фото кольца + кольцо на руке), движения медленные, кольцо нельзя искажать; текст только на финальной плашке.
+ОГРАНИЧЕНИЯ ПРОИЗВОДСТВА: ролики 10–15 сек, 3 кадра (2 из фото товара + товар в использовании), движения медленные, товар нельзя искажать; текст только на финальной плашке.
 Сделай бриф практичным: каждый тренд — с тем, как применить его в наших 3 кадрах. shot_ideas пиши как готовые описания кадров на английском (тип A/B/C/D).
 Ответ — JSON: summary_ru, top_trends[{{title, why, how_to_use}}], hooks[], shot_ideas[{{type, idea_en, why}}], visual{{light, colors, backgrounds}}, music_moods[], do[], dont[], experiments[], sources[{{title, url}}]."""
     data, meta = brains.ask("research", prompt, schema=BRIEF_SCHEMA, job=job, timeout=900)
     return data
 
 
-def run(job):
-    cfg = load_config()
+def run(job, nid=None):
+    cfg = load_config(nid)
+    nid = cfg["_nid"]
     job.say("Шаг 1/4 · поиск трендов в интернете")
     try:
         web = web_scan(job, cfg)
@@ -365,31 +380,31 @@ def run(job):
     job.say("Шаг 4/4 · синтез брифа недели")
     brief = synthesize(job, cfg, web, bds, apify)
     bid = datetime.now().strftime("%Y-%m-%d_%H%M")
-    BRIEFS.joinpath(f"{bid}.json").write_text(json.dumps({
+    _paths(nid)["briefs"].joinpath(f"{bid}.json").write_text(json.dumps({
         "created": datetime.now().isoformat(timespec="seconds"), "config": cfg,
         "web": web, "breakdowns": bds, "apify": [{"task": a["task"], "n": len(a["items"])} for a in apify],
         "brief": brief}, ensure_ascii=False, indent=2), encoding="utf-8")
-    set_active(bid)
+    set_active(nid, bid)
     job.say(f"Бриф {bid} готов и стал активным: его получит сценарист.")
     return {"brief": bid}
 
 
-def analyze_one(job, ref: str, kind: str = "url"):
+def analyze_one(job, nid, ref: str, kind: str = "url"):
     """Разобрать один ролик по кнопке (ссылка YouTube или загруженный файл)."""
-    res = breakdown_refs(job, load_config(), items=[(kind, ref)], force=True)
+    res = breakdown_refs(job, load_config(nid), items=[(kind, ref)], force=True)
     if not res:
         raise RuntimeError("Ролик не разобран — подробности выше в журнале.")
     return {"breakdowns": len(res)}
 
 
-def delete_ref(name: str):
-    f = REFS / Path(name).name
+def delete_ref(nid, name: str):
+    f = _paths(nid)["refs"] / Path(name).name
     if f.exists():
         f.unlink()
-    b = _breakdowns()
+    b = _breakdowns(nid)
     b.pop("file:" + Path(name).name, None)
-    _save_breakdowns(b)
+    _save_breakdowns(nid, b)
 
 
-def all_breakdowns():
-    return list(_breakdowns().values())[::-1]
+def all_breakdowns(nid=None):
+    return list(_breakdowns(nid).values())[::-1]
