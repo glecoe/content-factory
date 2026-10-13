@@ -1,0 +1,265 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<meta name="robots" content="noindex">
+<title>Анкета для разработки сайта</title>
+<style>
+  :root{--bg:#F3F4F8;--card:#fff;--ink:#14161F;--muted:#5D6275;--line:#DADDE7;--accent:#3346F0;--accent-d:#2232C9;--accent-s:#E6E9FF;
+    --err:#C2362B;--err-s:#FCE8E5;--warn:#8A6100;--warn-s:#FFF4D6;--ok:#0E7A4F;--ok-s:#E2F5EC;--r:14px}
+  @media (prefers-color-scheme:dark){:root{--bg:#0F111A;--card:#181B27;--ink:#EDEFF7;--muted:#9AA0B8;--line:#2C3142;--accent:#7C8BFF;--accent-d:#97A3FF;--accent-s:#232A55;
+    --err:#FF8A7E;--err-s:#3A1F1D;--warn:#F1C35A;--warn-s:#33290F;--ok:#5FD3A0;--ok-s:#123326}}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif}
+  main{max-width:760px;margin:0 auto;padding:28px 16px 120px}
+  header h1{font-size:30px;line-height:1.15;margin:0 0 8px;letter-spacing:-.01em}
+  header p{margin:0 0 6px;color:var(--muted)}
+  .progress{position:sticky;top:0;z-index:5;background:var(--bg);padding:12px 0 10px;margin-bottom:6px}
+  .bar{height:6px;border-radius:6px;background:var(--line);overflow:hidden}
+  .bar i{display:block;height:100%;width:0;background:var(--accent);transition:width .3s}
+  .progress small{display:block;color:var(--muted);font-size:13px;margin-top:6px}
+  section{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:20px 20px 6px;margin-top:16px}
+  section h2{margin:0 0 4px;font-size:19px}
+  section>.hint{color:var(--muted);font-size:14px;margin:0 0 12px}
+  .f{margin:14px 0 16px}
+  .f[hidden]{display:none}
+  label.l{display:block;font-weight:600;font-size:15px;margin-bottom:4px}
+  .req{color:var(--err);margin-left:2px}
+  .help{color:var(--muted);font-size:13.5px;margin:-2px 0 6px}
+  input[type=text],input[type=number],select,textarea{width:100%;font:inherit;color:inherit;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px 12px}
+  textarea{min-height:96px;resize:vertical}
+  input:focus,select:focus,textarea:focus{outline:2px solid var(--accent);outline-offset:1px;border-color:transparent}
+  .opts{display:flex;flex-wrap:wrap;gap:8px}
+  .opts label{display:flex;align-items:center;gap:8px;border:1px solid var(--line);border-radius:10px;padding:9px 13px;cursor:pointer}
+  .opts input{accent-color:var(--accent);margin:0}
+  .opts label:has(input:checked){border-color:var(--accent);background:var(--accent-s)}
+  .msg{font-size:13.5px;margin-top:5px;border-radius:8px;padding:5px 9px}
+  .msg.error{color:var(--err);background:var(--err-s)} .msg.warn{color:var(--warn);background:var(--warn-s)}
+  .f.bad input,.f.bad textarea,.f.bad select{border-color:var(--err)}
+  .drop{border:1.5px dashed var(--line);border-radius:12px;padding:16px;text-align:center;color:var(--muted);cursor:pointer}
+  .drop:hover{border-color:var(--accent)}
+  .logo-prev{display:flex;align-items:center;gap:12px;margin-top:8px}
+  .logo-prev img{max-height:64px;max-width:200px;background:#fff;border:1px solid var(--line);border-radius:8px;padding:6px}
+  button{font:inherit;cursor:pointer;border-radius:10px;padding:11px 18px;border:1px solid var(--line);background:var(--card);color:var(--ink)}
+  button.primary{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
+  button.primary:hover{background:var(--accent-d)}
+  button.link{border:0;background:none;color:var(--accent);padding:0;text-decoration:underline}
+  .final{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:20px;margin-top:16px}
+  .final .row{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-top:12px}
+  .summary{margin:10px 0 0;padding:0;list-style:none}
+  .summary li{padding:4px 0;font-size:14.5px}
+  .summary a{color:inherit}
+  .done{background:var(--ok-s);color:var(--ok);border-radius:12px;padding:14px 16px;margin-top:12px}
+  .note{font-size:13px;color:var(--muted);margin-top:14px}
+  .saved{font-size:13px;color:var(--muted)}
+  @media (max-width:560px){header h1{font-size:25px}section{padding:16px 14px 4px}}
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1 id="h1">Анкета для разработки сайта</h1>
+    <p>Ответы помогут сделать сайт точно под вашу задачу. Обязательные вопросы отмечены <span class="req">*</span> — остальные по желанию, но чем подробнее, тем лучше результат.</p>
+    <p class="saved" id="saved"></p>
+  </header>
+  <div class="progress" aria-hidden="true"><div class="bar"><i id="barI"></i></div><small id="barT"></small></div>
+  <form id="form" novalidate></form>
+  <div class="final" id="final">
+    <h2 style="margin:0 0 4px;font-size:19px">Готово?</h2>
+    <p class="help" id="finalHint"></p>
+    <ul class="summary" id="summary"></ul>
+    <div class="row"><button class="primary" id="submit" type="button"></button><button type="button" id="dl" hidden>Скачать копию ответов</button></div>
+    <div id="result"></div>
+    <p class="note">Ответы сохраняются в этом браузере, пока вы заполняете анкету, — можно закрыть страницу и вернуться позже.</p>
+  </div>
+</main>
+<script>
+(function () {
+  "use strict";
+  var C = /*__CONFIG__*/null;
+  var FIELDS = {}, A = {}, logo = null, KEY = "studio-brief:" + C.site;
+  C.sections.forEach(function (s) { s.fields.forEach(function (f) { FIELDS[f.id] = f; }); });
+  var $ = function (s, el) { return (el || document).querySelector(s); };
+  var esc = function (s) { return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]; }); };
+  var store = { get: function () { try { return JSON.parse(localStorage.getItem(KEY) || "null"); } catch (e) { return null; } },
+    set: function (v) { try { localStorage.setItem(KEY, JSON.stringify(v)); return true; } catch (e) { return false; } } };
+
+  if (C.title) $("#h1").textContent = "Анкета для разработки сайта · " + C.title;
+  $("#submit").textContent = C.mode === "link" ? "Отправить анкету" : "Сохранить ответы";
+  $("#finalHint").textContent = C.mode === "link"
+    ? "Проверим ответы и отправим. Если что-то не так — подсветим, что поправить."
+    : "Проверим ответы и сохраним файл с ответами. Его нужно отправить нам тем же способом, каким вы получили анкету.";
+
+  // ---------------------------------------------------------------- отрисовка
+  function fieldHtml(f) {
+    var id = "q_" + f.id, star = f.required ? '<span class="req">*</span>' : "", ctl = "";
+    var ph = f.placeholder ? ' placeholder="' + esc(f.placeholder) + '"' : "";
+    if (f.type === "textarea") ctl = '<textarea id="' + id + '" name="' + f.id + '"' + ph + "></textarea>";
+    else if (f.type === "select") ctl = '<select id="' + id + '" name="' + f.id + '"><option value="">— выберите —</option>' +
+      Object.keys(f.options).map(function (k) { return '<option value="' + esc(k) + '">' + esc(f.options[k]) + "</option>"; }).join("") + "</select>";
+    else if (f.type === "radio") ctl = '<div class="opts" role="radiogroup">' + Object.keys(f.options).map(function (k) {
+      return '<label><input type="radio" name="' + f.id + '" value="' + esc(k) + '">' + esc(f.options[k]) + "</label>"; }).join("") + "</div>";
+    else if (f.type === "number") ctl = '<input type="number" id="' + id + '" name="' + f.id + '" min="' + f.min_value + '" max="' + f.max_value + '"' + ph + ">";
+    else if (f.type === "file") ctl = '<div class="drop" id="logoDrop" tabindex="0" role="button">Перетащите файл сюда или нажмите, чтобы выбрать</div>' +
+      '<input type="file" id="logoIn" accept=".png,.jpg,.jpeg,.svg,.webp,image/png,image/jpeg,image/svg+xml,image/webp" hidden><div id="logoPrev"></div>';
+    else ctl = '<input type="text" id="' + id + '" name="' + f.id + '"' + ph + ">";
+    return '<div class="f" data-f="' + f.id + '"><label class="l" for="' + id + '">' + esc(f.label) + star + "</label>" +
+      (f.help ? '<p class="help">' + esc(f.help) + "</p>" : "") + ctl + '<div class="msgs"></div></div>';
+  }
+  $("#form").innerHTML = C.sections.map(function (s) {
+    return '<section id="s_' + s.id + '"><h2>' + esc(s.title) + "</h2>" + (s.hint ? '<p class="hint">' + esc(s.hint) + "</p>" : "") +
+      s.fields.map(fieldHtml).join("") + "</section>";
+  }).join("");
+
+  // ---------------------------------------------------------------- значения
+  function read() {
+    Object.keys(FIELDS).forEach(function (id) {
+      var f = FIELDS[id];
+      if (f.type === "file") return;
+      if (f.type === "radio") { var r = document.querySelector('input[name="' + id + '"]:checked'); A[id] = r ? r.value : ""; }
+      else A[id] = ($("#q_" + id) || {}).value || "";
+    });
+  }
+  function write(vals) {
+    Object.keys(vals || {}).forEach(function (id) {
+      var f = FIELDS[id], v = vals[id];
+      if (!f || f.type === "file") return;
+      if (f.type === "radio") { var r = document.querySelector('input[name="' + id + '"][value="' + CSS.escape(v) + '"]'); if (r) r.checked = true; }
+      else if ($("#q_" + id)) $("#q_" + id).value = v;
+    });
+  }
+  var visible = function (f) { return Object.keys(f.show || {}).every(function (k) { return f.show[k].indexOf(String(A[k] || "")) >= 0; }); };
+  function toggle() { Object.keys(FIELDS).forEach(function (id) { document.querySelector('[data-f="' + id + '"]').hidden = !visible(FIELDS[id]); }); }
+
+  // ---------------------------------------------------------------- проверки (те же, что в студии)
+  var digits = function (s) { return String(s || "").replace(/\D/g, ""); };
+  function innOk(v) {
+    var d = digits(v).split("").map(Number), s = function (w) { return w.reduce(function (a, k, i) { return a + k * d[i]; }, 0) % 11 % 10; };
+    if (d.length === 10) return s([2, 4, 10, 3, 5, 9, 4, 6, 8]) === d[9];
+    if (d.length === 12) return s([7, 2, 4, 10, 3, 5, 9, 4, 6, 8]) === d[10] && s([3, 7, 2, 4, 10, 3, 5, 9, 4, 6, 8]) === d[11];
+    return false;
+  }
+  function ogrnOk(v) {
+    var s = digits(v);
+    if (s.length === 13) return Number(BigInt(s.slice(0, 12)) % 11n % 10n) === +s[12];
+    if (s.length === 15) return Number(BigInt(s.slice(0, 14)) % 13n % 10n) === +s[14];
+    return false;
+  }
+  function check() {
+    var out = {}, add = function (id, lvl, m) { (out[id] = out[id] || []).push([lvl, m]); };
+    Object.keys(FIELDS).forEach(function (id) {
+      var f = FIELDS[id];
+      if (f.type === "file" || !visible(f)) return;
+      var v = String(A[id] || "").trim();
+      if (!v) { if (f.required) add(id, "error", "Заполните, пожалуйста"); return; }
+      if (f.min && v.length < f.min) add(id, "warn", "Совсем коротко — расскажите подробнее (хотя бы " + f.min + " символов)");
+      if (v.length > (f.max || 4000)) add(id, "warn", "Слишком длинно — сократите до " + (f.max || 4000) + " символов");
+      if (f.type === "number" && (!/^\d+$/.test(v) || +v < f.min_value || +v > f.max_value)) add(id, "error", "Число от " + f.min_value + " до " + f.max_value);
+      if (f.check === "email" && !/^[^@\s]+@[^@\s]+\.[A-Za-zА-Яа-я]{2,}$/.test(v)) add(id, "error", "Проверьте адрес почты");
+      if (f.check === "phone" && (digits(v).length < 10 || digits(v).length > 15)) add(id, "error", "Проверьте номер: нужно 10–15 цифр");
+      if (f.check === "inn") {
+        if (!innOk(v)) add(id, "error", "ИНН не проходит проверку — проверьте цифры");
+        else if (A.legal === "ooo" && digits(v).length !== 10) add(id, "error", "У ООО ИНН из 10 цифр");
+        else if ((A.legal === "ip" || A.legal === "npd") && digits(v).length !== 12) add(id, "error", "У ИП и самозанятого ИНН из 12 цифр");
+      }
+      if (f.check === "ogrn" && !ogrnOk(v)) add(id, "error", "ОГРН/ОГРНИП не проходит проверку — проверьте цифры");
+      if (f.check === "domain" && !/^(https?:\/\/)?([a-zа-яё0-9-]+\.)+[a-zа-яё]{2,}\/?$/i.test(v)) add(id, "error", "Пример домена: ulybka-kazan.ru");
+      if (f.check === "urls" && !/https?:\/\/|www\.|\w\.(ru|com|рф|net|org|io|by|kz)\b/i.test(v)) add(id, "warn", "Добавьте хотя бы одну ссылку — так проще попасть в ваш вкус");
+    });
+    if (!["phone", "email", "messengers"].some(function (k) { return String(A[k] || "").trim(); })) add("phone", "warn", "Укажите хотя бы один контакт для сайта");
+    return out;
+  }
+  function paint(issues, all) {
+    document.querySelectorAll(".f").forEach(function (el) {
+      var id = el.dataset.f, m = (issues[id] || []).filter(function (x) { return all || touched[id]; });
+      el.classList.toggle("bad", m.some(function (x) { return x[0] === "error"; }));
+      el.querySelector(".msgs").innerHTML = m.map(function (x) { return '<div class="msg ' + x[0] + '">' + esc(x[1]) + "</div>"; }).join("");
+    });
+  }
+  function progress() {
+    var req = Object.keys(FIELDS).filter(function (id) { var f = FIELDS[id]; return f.required && visible(f); });
+    var done = req.filter(function (id) { return String(A[id] || "").trim(); }).length;
+    $("#barI").style.width = (req.length ? 100 * done / req.length : 100) + "%";
+    $("#barT").textContent = "Обязательные вопросы: " + done + " из " + req.length;
+  }
+
+  // ---------------------------------------------------------------- логотип
+  function setLogo(file) {
+    if (!file) return;
+    var ext = (file.name.split(".").pop() || "").toLowerCase();
+    if (["png", "jpg", "jpeg", "svg", "webp"].indexOf(ext) < 0) return alert("Логотип: PNG, SVG, JPG или WEBP");
+    if (file.size > C.max_logo) return alert("Файл больше 5 МБ — пришлите, пожалуйста, поменьше");
+    var r = new FileReader();
+    r.onload = function () { logo = { name: file.name, data: r.result }; showLogo(); };
+    r.readAsDataURL(file);
+  }
+  function showLogo() {
+    $("#logoPrev").innerHTML = logo ? '<div class="logo-prev"><img alt="" src="' + esc(logo.data) + '"><span>' + esc(logo.name) +
+      '</span><button type="button" class="link" id="logoRm">убрать</button></div>' : "";
+    if (logo) $("#logoRm").onclick = function () { logo = null; showLogo(); };
+  }
+  var drop = $("#logoDrop"), inp = $("#logoIn");
+  drop.onclick = function () { inp.click(); };
+  drop.onkeydown = function (e) { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); inp.click(); } };
+  inp.onchange = function () { setLogo(inp.files[0]); };
+  drop.ondragover = function (e) { e.preventDefault(); };
+  drop.ondrop = function (e) { e.preventDefault(); setLogo(e.dataTransfer.files[0]); };
+
+  // ---------------------------------------------------------------- черновик и события
+  var touched = {}, timer;
+  var draft = store.get();
+  write(C.prefill); if (draft && draft.answers) write(draft.answers);
+  read(); toggle(); progress();
+  if (draft && draft.at) $("#saved").textContent = "Черновик восстановлен: " + new Date(draft.at).toLocaleString("ru-RU");
+  function onChange(e) {
+    var id = e.target.name; if (id) touched[id] = true;
+    read(); toggle(); progress(); paint(check(), false);
+    clearTimeout(timer);
+    timer = setTimeout(function () { if (store.set({ at: Date.now(), answers: A })) $("#saved").textContent = "Черновик сохранён в этом браузере · " + new Date().toLocaleTimeString("ru-RU"); }, 500);
+  }
+  $("#form").addEventListener("input", onChange);
+  $("#form").addEventListener("change", onChange);
+
+  // ---------------------------------------------------------------- отправка
+  function payload() { return { format: C.format, site: C.site, submitted: new Date().toISOString(), answers: A, logo: logo }; }
+  function download() {
+    var name = "Ответы на анкету" + (A.name ? " — " + A.name.replace(/[\\/:*?"<>|]+/g, " ").slice(0, 60) : "") + ".json";
+    var url = URL.createObjectURL(new Blob([JSON.stringify(payload(), null, 1)], { type: "application/json" }));
+    var a = document.createElement("a"); a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(function () { URL.revokeObjectURL(url); }, 4000);
+    return name;
+  }
+  $("#dl").onclick = download;
+  $("#submit").onclick = function () {
+    read();
+    var is = check(); paint(is, true);
+    var errs = [], warns = [];
+    Object.keys(is).forEach(function (id) { is[id].forEach(function (x) { (x[0] === "error" ? errs : warns).push([id, x[1]]); }); });
+    $("#summary").innerHTML = errs.concat(warns).map(function (x) {
+      return '<li class="' + (errs.indexOf(x) >= 0 ? "e" : "w") + '">' + (errs.indexOf(x) >= 0 ? "⛔ " : "⚠️ ") + '<a href="#" data-go="' + x[0] + '">' +
+        esc(FIELDS[x[0]].label) + "</a> — " + esc(x[1]) + "</li>"; }).join("");
+    $("#summary").querySelectorAll("[data-go]").forEach(function (a) { a.onclick = function (e) { e.preventDefault(); var el = document.querySelector('[data-f="' + a.dataset.go + '"]'); el.scrollIntoView({ behavior: "smooth", block: "center" }); var c = el.querySelector("input,textarea,select"); if (c) c.focus({ preventScroll: true }); }; });
+    if (errs.length) { $("#result").innerHTML = '<p class="msg error">Исправьте отмеченное ⛔ — и нажмите ещё раз.</p>'; return; }
+    if (warns.length && !$("#submit").dataset.warned) {
+      $("#submit").dataset.warned = "1";
+      $("#result").innerHTML = '<p class="msg warn">Есть замечания ⚠️ — их можно поправить или нажать кнопку ещё раз, чтобы ' + (C.mode === "link" ? "отправить" : "сохранить") + " как есть.</p>";
+      return;
+    }
+    if (C.mode !== "link") {
+      var n = download();
+      $("#result").innerHTML = '<div class="done"><b>Файл «' + esc(n) + '» сохранён</b> в папку загрузок.<br>Отправьте его нам в ответ на сообщение с анкетой. Спасибо!</div>';
+      return;
+    }
+    $("#submit").disabled = true; $("#result").innerHTML = '<p class="help">Отправляю…</p>';
+    fetch(location.pathname, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload()) })
+      .then(function (r) { return r.json().catch(function () { return {}; }).then(function (j) { if (!r.ok) throw new Error(j.error || ("Ошибка " + r.status)); }); })
+      .then(function () { $("#result").innerHTML = '<div class="done"><b>Анкета отправлена.</b> Спасибо! Мы изучим ответы и свяжемся с вами.<br>Если нужно что-то дополнить — поправьте и отправьте ещё раз.</div>'; $("#dl").hidden = false; })
+      .catch(function (e) { $("#result").innerHTML = '<p class="msg error">Не получилось отправить: ' + esc(e.message) + '. Сохраните ответы файлом и пришлите нам.</p>'; $("#dl").hidden = false; })
+      .then(function () { $("#submit").disabled = false; });
+  };
+})();
+</script>
+</body>
+</html>

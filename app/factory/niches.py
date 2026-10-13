@@ -191,6 +191,22 @@ def archive(nid: str):
     save(n)
 
 
+def delete(nid: str) -> dict:
+    """Удалить нишу навсегда: её папку (вкус, оценки, ресёрч) и все её изделия с роликами. Последнюю нишу не удаляем."""
+    from . import store
+    with _lock:
+        n = load(nid)
+        if not any(x["id"] != nid for x in list_niches()):
+            raise ValueError("Это единственная ниша — сначала создай другую.")
+        products = [p["id"] for p in store.list_products(nid)]
+        for pid in products:
+            shutil.rmtree(store.pdir(pid), ignore_errors=True)
+        shutil.rmtree(_dir(nid), ignore_errors=True)
+        if CURRENT.exists() and CURRENT.read_text().strip() == nid:
+            CURRENT.unlink()
+        return {"ok": True, "name": n.get("name"), "products": len(products)}
+
+
 def default_id() -> str:
     migrate()
     if CURRENT.exists():

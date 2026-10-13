@@ -139,6 +139,32 @@ def archive_lab(lid):
     (_lab_dir(l["id"]) / "lab.json").write_text(json.dumps(l, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def delete_lab(lid) -> dict:
+    """Удалить направление навсегда вместе со всеми его сайтами. Последнее направление не удаляем."""
+    with _lock:
+        if not lid or not (LABS / lid / "lab.json").exists():
+            raise ValueError("Направление не найдено")
+        if not any(x["id"] != lid for x in list_labs()):
+            raise ValueError("Это единственное направление — сначала создай другое.")
+        l = load_lab(lid)
+        sites = [p["id"] for p in list_projects(lid)]
+        for sid in sites:
+            shutil.rmtree(pdir(sid), ignore_errors=True)
+        shutil.rmtree(_lab_dir(lid), ignore_errors=True)
+        return {"ok": True, "name": l.get("name"), "sites": len(sites)}
+
+
+def delete(sid: str) -> dict:
+    """Удалить сайт навсегда: бриф, ресёрч, фото, видео, промпты, сборки и статистику."""
+    with _lock:
+        d = pdir(sid)
+        if not (d / "project.json").exists():
+            raise ValueError("Сайт не найден")
+        name = json.loads((d / "project.json").read_text(encoding="utf-8")).get("name")
+        shutil.rmtree(d)
+        return {"ok": True, "name": name}
+
+
 def lab_text(p) -> str:
     l = load_lab(p.get("lab"))
     if l["id"] == "general" and not (l.get("style") or l.get("notes")):
@@ -940,6 +966,8 @@ def run_prompts(job, sid):
     (d / "CHECKLIST.md").write_text("# Приёмка\n\n" + "\n".join(f"- [ ] {x}" for x in data.get("checklist", [])) + "\n",
                                      encoding="utf-8")
     (d / "HOW_TO_USE.md").write_text(HOW_TO_USE, encoding="utf-8")
+    from . import sitestats
+    sitestats.write_pack_file(sid)          # счётчик для «Админки»: посещения, интересы, заявки, продажи
     info = {"created": datetime.now().isoformat(timespec="seconds"), "concept": c.get("name"),
             "pages": [x.get("title") for x in data.get("pages", [])], "by": meta.get("provider"), "edits": [],
             "live": live}
@@ -954,7 +982,7 @@ def run_prompts(job, sid):
 
 
 # ----------------------------------------------------------------- пакет: состав, история, правка по пожеланиям
-PACK_ORDER = ["MASTER.md", "pages/", "CONTENT.md", "PHOTOS.md", "INTEGRATIONS.md", "LEGAL.md", "CHECKLIST.md",
+PACK_ORDER = ["MASTER.md", "pages/", "CONTENT.md", "PHOTOS.md", "INTEGRATIONS.md", "LEGAL.md", "STATS.md", "CHECKLIST.md",
               "LAUNCH.md", "HOW_TO_USE.md", "ALL_IN_ONE.md"]
 
 
@@ -1012,7 +1040,7 @@ EDIT_PROMPT = """В этой папке — пакет промптов, по к
 Где что лежит: MASTER.md — роль, компания, концепция, дизайн-система, компоненты, анимация, техника, порядок работы;
 pages/NN_slug.md — конкретная страница: секции, раскладка, точные тексты; CONTENT.md — все тексты сайта для владельца;
 PHOTOS.md — фото и видео; INTEGRATIONS.md — оплата, чеки, заявки, аналитика; LEGAL.md — юридические тексты;
-CHECKLIST.md — приёмка; LAUNCH.md — инструкция владельцу по запуску.
+STATS.md — счётчик статистики для админки студии; CHECKLIST.md — приёмка; LAUNCH.md — инструкция владельцу по запуску.
 
 КАК РАБОТАТЬ (быстро и точечно):
 1. По карте и Grep (ключевые слова пожелания) найди ТОЛЬКО затронутые файлы и места. Не читай файлы, которые не нужны.
@@ -1151,6 +1179,7 @@ def _build_prompt(p, n_ph: int, extra: str, n_vid: int = 0) -> str:
 {("Видео: в assets/videos лежат " + str(n_vid) + " готовых видео с постерами, места — в assets/videos/VIDEOS.json. "
   "Видео — muted autoplay loop playsinline с poster, на мобильных и при prefers-reduced-motion — постер.") if n_vid else ""}
 {live_txt}
+{"Статистика: встрой счётчик студии строго по _brief/STATS.md (скрипт на всех страницах, data-interest на ключевых элементах, событие заявки после успешной отправки форм" + (", продажа — с сервера по подтверждённой оплате" if live else "") + ")." if (pdir(p["id"]) / "prompts" / "STATS.md").exists() else ""}
 Работай экономно: не перечитывай одни и те же файлы, пиши файлы целиком сразу, без лишних черновиков.
 JSON-LD для поисковиков — один объект {{"@context": "https://schema.org", "@graph": [...]}}, не массив (массив ломает скрипты и расширения браузера).
 Порядок: 1) дизайн-система и общие стили/компоненты; 2) страницы и секции по очереди, полностью, с настоящими текстами;

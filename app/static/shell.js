@@ -62,7 +62,7 @@ async function switchNiche(id, ev) {
   await withTransition(ev, async () => { S.page = "home"; render(); }, "space");
 }
 async function switchLab(id, ev) {
-  S.lab = id; LS.set("cf.lab", id); S.site = null;
+  S.lab = id; LS.set("cf.lab", id); S.site = null; ADM.data = null; ADM.site = ""; ADM.allSites = null;
   await loadSites();
   await withTransition(ev, async () => { S.page = "labhome"; render(); }, "space");
 }
@@ -76,7 +76,7 @@ function renderRail() {
   const items = fac ? S.state.products : (S.sites?.projects || []);
   const nav = fac
     ? [["home", "Обзор ниши"], ["research", "Тренды ниши"], ["taste", "Вкус ниши"], ["niche", "Контекст ниши"], ["costs", "Расходы"]]
-    : [["labhome", "Обзор направления"], ["lab", "Контекст направления"]];
+    : [["labhome", "Обзор направления"], ["admin", "Админка · статистика"], ["lab", "Контекст направления"]];
   $("#rail").innerHTML = `
     <div class="switch" role="tablist" aria-label="Режим">
       <span class="thumb"></span>
@@ -122,6 +122,7 @@ function renderRail() {
     S.page = b.dataset.page;
     if (S.page === "research") await loadResearch();
     if (S.page === "labhome") await loadSites();
+    if (S.page === "admin") ADM.data = null;
     render();
   })));
 }
@@ -146,6 +147,7 @@ function render() {
   if (S.mode === "lab") {
     if (S.page === "site" && S.site) return renderSite(v, top);
     if (S.page === "lab") return renderLabCtx(v, top);
+    if (S.page === "admin") return renderAdmin(v, top);
     return renderSites(v, top);
   }
   if (S.page === "product" && S.product) return renderProduct(v, top);
@@ -243,7 +245,7 @@ function renderNicheCtx(v, top) {
       <div class="grid2">${fields.map(([k, label, rows]) => `<div class="field ${rows === 3 ? "span2" : ""}"><label>${label}</label>${rows
         ? `<textarea data-k="${k}" style="min-height:${rows * 30 + 20}px">${esc(N[k] || "")}</textarea>` : `<input type="text" data-k="${k}" value="${esc(N[k] || "")}">`}</div>`).join("")}</div></div>`).join("") +
     `<div class="row" style="margin-bottom:16px"><button class="btn primary" id="nSave">Сохранить</button><span class="spacer"></span>
-      ${S.state.niches.length > 1 ? `<button class="btn ghost danger" id="nArch">Убрать нишу в архив</button>` : ""}</div>`;
+      ${S.state.niches.length > 1 ? `<button class="btn ghost" id="nArch">Убрать нишу в архив</button><button class="btn danger" id="nDel">Удалить нишу</button>` : ""}</div>`;
   $("#nSave").onclick = () => guard(async () => {
     const body = {}; v.querySelectorAll("[data-k]").forEach((el) => (body[el.dataset.k] = el.value));
     await api(`/api/niches/${N.id}/update`, { body }); await loadState(); toast("Контекст сохранён"); render();
@@ -252,6 +254,13 @@ function renderNicheCtx(v, top) {
   if ($("#nArch")) $("#nArch").onclick = () => guard(async () => {
     if (!confirm(`Убрать «${N.name}» в архив? Данные останутся на диске.`)) return;
     await api(`/api/niches/${N.id}/archive`, { body: {} }); S.niche = ""; LS.set("cf.niche", ""); await loadState(); S.page = "home"; render();
+  });
+  if ($("#nDel")) $("#nDel").onclick = () => guard(async () => {
+    const n = S.state.products.length;
+    if (!confirm(`Удалить нишу «${N.name}» навсегда?\n\nУдалятся контекст, вкус, оценки, тренды${n ? ` и ${n} изд. со всеми кадрами и роликами` : ""}. Отменить нельзя.`)) return;
+    const r = await api(`/api/niches/${N.id}/delete`, { body: {} });
+    S.niche = ""; LS.set("cf.niche", ""); S.product = null; S.research = null; await loadState(); S.page = "home"; render();
+    toast(`Ниша «${r.name}» удалена${r.products ? `, изделий: ${r.products}` : ""}`);
   });
 }
 
@@ -266,7 +275,7 @@ function renderLabCtx(v, top) {
   v.innerHTML = `<div class="panel"><div class="grid2">${F.map(([k, label, rows]) => `<div class="field ${rows === 3 ? "span2" : ""}"><label>${label}</label>${rows
       ? `<textarea data-k="${k}" style="min-height:${rows * 30 + 20}px">${esc(L[k] || "")}</textarea>` : `<input type="text" data-k="${k}" value="${esc(L[k] || "")}">`}</div>`).join("")}</div>
     <div class="row"><button class="btn primary" id="lSave">Сохранить</button><span class="spacer"></span>
-      ${(S.sites.labs || []).length > 1 ? `<button class="btn ghost danger" id="lArch">Убрать в архив</button>` : ""}</div></div>`;
+      ${(S.sites.labs || []).length > 1 ? `<button class="btn ghost" id="lArch">Убрать в архив</button><button class="btn danger" id="lDel">Удалить направление</button>` : ""}</div></div>`;
   $("#lSave").onclick = () => guard(async () => {
     const body = {}; v.querySelectorAll("[data-k]").forEach((el) => (body[el.dataset.k] = el.value));
     await api(`/api/labs/${L.id}/update`, { body }); await loadSites(); toast("Сохранено"); render();
@@ -274,6 +283,13 @@ function renderLabCtx(v, top) {
   if ($("#lArch")) $("#lArch").onclick = () => guard(async () => {
     if (!confirm(`Убрать «${L.name}» в архив?`)) return;
     await api(`/api/labs/${L.id}/archive`, { body: {} }); S.lab = ""; LS.set("cf.lab", ""); await loadSites(); S.page = "labhome"; render();
+  });
+  if ($("#lDel")) $("#lDel").onclick = () => guard(async () => {
+    const n = (S.sites.projects || []).length;
+    if (!confirm(`Удалить направление «${L.name}» навсегда?\n\nУдалятся контекст и вкус направления${n ? ` и ${n} сайт(ов) со всеми фото, промптами, сборками и статистикой` : ""}. Отменить нельзя.`)) return;
+    const r = await api(`/api/labs/${L.id}/delete`, { body: {} });
+    S.lab = ""; LS.set("cf.lab", ""); S.site = null; ADM.data = null; await loadSites(); S.page = "labhome"; render();
+    toast(`Направление «${r.name}» удалено${r.sites ? `, сайтов: ${r.sites}` : ""}`);
   });
 }
 

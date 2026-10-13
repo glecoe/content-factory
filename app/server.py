@@ -17,18 +17,20 @@ import time
 import webbrowser
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
-from urllib.parse import urlparse, parse_qs, unquote
+from urllib.parse import urlparse, parse_qs, unquote, quote
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from factory import config, store, pipeline, jobs, media, montage, brains, research, gen, library, sitelab, niches  # noqa: E402
-from factory import sitelaunch, sitevideo  # noqa: E402
+from factory import sitelaunch, sitevideo, sitestats, siteform  # noqa: E402
 from factory.config import DATA, APP, MODELS  # noqa: E402
 from factory.safety import public_error  # noqa: E402
 
 STATIC = APP / "static"
 MAX_UPLOAD = 500 * 1024 * 1024        # потолок загрузки файла
 MAX_JSON = 40 * 1024 * 1024           # потолок JSON-запроса (PNG финальной плашки в base64 — несколько МБ)
+MAX_COLLECT = 4 * 1024                # потолок события счётчика сайтов
+MAX_FORM = 10 * 1024 * 1024           # потолок ответов анкеты (с логотипом в base64)
 INLINE_TYPES = ("image/", "video/", "audio/")
 TOKEN_FILE = DATA / ".studio_token"
 
@@ -38,6 +40,9 @@ APP_CSP = ("default-src 'self'; script-src 'self'; connect-src 'self'; img-src '
            "object-src 'none'; base-uri 'none'; form-action 'self'")
 # Сгенерированные сайты и любые чужие файлы: отдельный «нулевой» источник, без доступа к API студии
 SANDBOX_CSP = "sandbox allow-scripts allow-forms allow-popups allow-modals; frame-ancestors 'self'"
+# Анкета заказчика по ссылке: свой встроенный скрипт и стили, запросы — только на свой адрес
+FORM_CSP = ("default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; "
+            "connect-src 'self'; form-action 'none'; frame-ancestors 'none'; base-uri 'none'")
 FILE_CSP = "sandbox; default-src 'none'; img-src 'self' data:; media-src 'self'; style-src 'unsafe-inline'; frame-ancestors 'self'"
 
 
@@ -278,7 +283,10 @@ class Handler(BaseHTTPRequestHandler):
                 download_name = path.name
         if download_name:
             safe = re.sub(r'[^\w.\-]+', "_", download_name)[:120] or "file"
-            self.send_header("Content-Disposition", f'attachment; filename="{safe}"')
+            stem, dot, ext = safe.rpartition(".") if "." in safe else (safe, "", "")
+            ascii_ = re.sub(r"[^A-Za-z0-9_\-]+", "_", stem).strip("_")
+            ascii_ = (ascii_ if len(ascii_) >= len(stem) // 2 and ascii_ else "download") + dot + re.sub(r"[^A-Za-z0-9]", "", ext)
+            self.send_header("Content-Disposition", f'attachment; filename="{ascii_}"; filename*=UTF-8\'\'{quote(safe)}')
         self.end_headers()
         with open(path, "rb") as fh:
             fh.seek(start)
@@ -316,9 +324,81 @@ class Handler(BaseHTTPRequestHandler):
             return False
         return True
 
-    def do_OPTIONS(self):            # CORS-preflight не разрешаем никому
+    def do_OPTIONS(self):            # CORS-preflight разрешаем только счётчику сайтов
+        if urlparse(self.path).path == "/collect" and self._host_ok():
+            self.send_response(204)
+            self._cors()
+            self.send_header("Access-Control-Allow-Methods", "POST")
+            self.send_header("Access-Control-Allow-Headers", "Content-Type")
+            self.send_header("Access-Control-Max-Age", "86400")
+            self.send_header("Content-Length", "0")
+            return self.end_headers()
         self.close_connection = True
         self._err("forbidden", 403)
+
+    def _form(self, method: str):
+        """Анкета заказчика по секретной ссылке /form/<token>: без пароля студии, только эта анкета."""
+        self._jcache, self._body_read = None, False
+        if not self._host_ok():
+            self.close_connection = True
+            return self._err("forbidden", 403)
+        m = re.fullmatch(r"/form/([\w\-]{16,64})", urlparse(self.path).path)
+        sid = siteform.by_token(m.group(1)) if m else None
+        if not sid:
+            return self._err("Ссылка на анкету недействительна — попросите новую.", 404)
+        if method == "GET":
+            body = siteform.page(sid, "link").encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Security-Policy", FORM_CSP)
+            self.send_header("X-Robots-Tag", "noindex")
+            self.end_headers()
+            return self.wfile.write(body)
+        try:
+            if not siteform.rate_ok(self._client_ip()):
+                return self._err("Слишком много отправок — попробуйте через час.", 429)
+            if (self.headers.get("Origin") or "") and (urlparse(self.headers["Origin"]).netloc or "").lower() not in self._allowed_hosts():
+                return self._err("forbidden", 403)
+            if self._length() > MAX_FORM:
+                self.close_connection = True
+                return self._err("Слишком большой файл логотипа.", 413)
+            raw = json.loads(self._body(MAX_FORM).decode("utf-8") or "{}")
+            if not isinstance(raw, dict) or raw.get("site") != sid:
+                return self._err("Анкета не от этого сайта", 400)
+            siteform.save_answers(sid, raw, "ссылка")
+            return self._json({"ok": True})
+        except Exception as e:
+            self.close_connection = True
+            return self._err(e, 400)
+
+    def _cors(self):
+        self.send_header("Access-Control-Allow-Origin", "*")
+
+    def _collect(self):
+        """Публичный приём событий со счётчиков собранных сайтов: без пароля студии, но по ключу сайта.
+        Ничего не возвращает и не раскрывает — только 204 (принято) или 400."""
+        self._jcache, self._body_read = None, False
+        if not self._host_ok():
+            self.close_connection = True
+            return self._err("forbidden", 403)
+        try:
+            n = self._length()
+            if n > MAX_COLLECT:
+                raise BodyTooLarge()
+            raw = self._body(MAX_COLLECT)
+            ok = sitestats.rate_ok(self._client_ip())
+            d = json.loads(raw.decode("utf-8")) if raw else {}
+            ok = ok and isinstance(d, dict) and sitestats.collect(d)
+        except Exception:
+            self.close_connection = True
+            ok = False
+        self.send_response(204 if ok else 400)
+        self._cors()
+        self.send_header("Content-Length", "0")
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
 
     def do_PUT(self):
         self.do_OPTIONS()
@@ -327,6 +407,8 @@ class Handler(BaseHTTPRequestHandler):
 
     # ---------- routing ----------
     def do_GET(self):
+        if urlparse(self.path).path.startswith("/form/"):
+            return self._form("GET")
         if not self._gate():
             return
         u = urlparse(self.path)
@@ -355,6 +437,10 @@ class Handler(BaseHTTPRequestHandler):
                                    "video": {"usd": sitevideo.USD, "modes": sitevideo.MODES, "aspects": sitevideo.V_ASPECTS}})
             if path == "/api/labs":
                 return self._json({"labs": sitelab.list_labs()})
+            if path == "/api/stats":
+                lab = qs.get("lab", [""])[0]
+                return self._json(sitestats.summary("__all__" if lab == "__all__" else sitelab.resolve_lab(lab),
+                                                    int(qs.get("days", ["30"])[0] or 30), qs.get("site", [""])[0]))
             if path == "/api/niches":
                 return self._json({"niches": niches.list_niches(), "fields": niches.FIELDS})
             m = re.fullmatch(r"/api/niches/([\w\-]+)", path)
@@ -363,6 +449,13 @@ class Handler(BaseHTTPRequestHandler):
             m = re.fullmatch(r"/api/sites/([\w\-]+)", path)
             if m:
                 return self._json(sitelab.load(m.group(1)))
+            m = re.fullmatch(r"/api/sites/([\w\-]+)/form", path)
+            if m:
+                return self._json(siteform.review(m.group(1)))
+            m = re.fullmatch(r"/api/sites/([\w\-]+)/formfile", path)
+            if m:
+                f = siteform.file_path(m.group(1))
+                return self._file(f, download_name=f.name)
             m = re.fullmatch(r"/api/sites/([\w\-]+)/prompt", path)
             if m:
                 return self._json({"text": sitelab.read_prompt_file(m.group(1), qs.get("file", ["MASTER.md"])[0])})
@@ -410,6 +503,10 @@ class Handler(BaseHTTPRequestHandler):
             return self._err(e, 500)
 
     def do_POST(self):
+        if urlparse(self.path).path == "/collect":
+            return self._collect()
+        if urlparse(self.path).path.startswith("/form/"):
+            return self._form("POST")
         if not self._gate():
             return
         if not self._csrf_ok():
@@ -491,6 +588,8 @@ class Handler(BaseHTTPRequestHandler):
                 if act == "archive":
                     niches.archive(n_id)
                     return self._json({"ok": True})
+                if act == "delete":
+                    return self._json(niches.delete(n_id))
                 return self._err("unknown action", 404)
             # направления лаборатории
             lab = qs.get("lab", [""])[0] or None
@@ -503,6 +602,8 @@ class Handler(BaseHTTPRequestHandler):
                 if m.group(2) == "archive":
                     sitelab.archive_lab(m.group(1))
                     return self._json({"ok": True})
+                if m.group(2) == "delete":
+                    return self._json(sitelab.delete_lab(m.group(1)))
                 return self._err("unknown action", 404)
             if path == "/api/sites":
                 b = self._jbody()
@@ -510,6 +611,28 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/sites/taste":
                 sitelab.save_taste(self._jbody().get("text", ""), lab)
                 return self._json({"ok": True})
+            if path == "/api/sites/formimport":
+                return self._json(siteform.import_file(json.loads(self._body(MAX_FORM).decode("utf-8") or "{}"), lab))
+            # админка: статистика сайтов
+            if path in ("/api/stats/demo", "/api/stats/cleardemo"):
+                ids = [p["id"] for p in sitelab.list_projects("__all__" if lab == "__all__" else sitelab.resolve_lab(lab))]
+                site = self._jbody().get("site")
+                if site:
+                    ids = [x for x in ids if x == site]
+                fn = sitestats.demo if path.endswith("/demo") else sitestats.clear_demo
+                return self._json({"events": sum(fn(x) for x in ids), "sites": len(ids)})
+            m = re.fullmatch(r"/api/stats/([\w\-]+)/(\w+)", path)
+            if m:
+                if m.group(2) == "add":
+                    return self._json(sitestats.add_manual(m.group(1), self._jbody()))
+                if m.group(2) == "connect":
+                    info = sitestats.site_info(m.group(1))
+                    sitestats.write_pack_file(m.group(1))
+                    if sitelab.load(m.group(1)).get("prompts"):
+                        files = sitelab.refresh_pack(m.group(1))
+                        sitelab.update(m.group(1), lambda x: x["prompts"].__setitem__("files", files))
+                    return self._json(info)
+                return self._err("unknown action", 404)
             if path == "/api/sites/taste/update":
                 return self._json(jobs.start("Вкус направления", sitelab.run_taste, lab).to_dict())
             m = re.fullmatch(r"/api/sites/([\w\-]+)/(\w+)", path)
@@ -600,6 +723,22 @@ class Handler(BaseHTTPRequestHandler):
 def _site_action(self, sid, action, qs):
     S = sitelab
     J = lambda title, fn, *a: self._json(jobs.start(title, fn, sid, *a).to_dict())  # noqa: E731
+    if action == "delete":
+        return self._json(S.delete(sid))
+    # анкета заказчика
+    F = siteform
+    if action == "formlink":
+        return self._json({"url": F.public_url(sid)})
+    if action == "formrenew":
+        F.token(sid, renew=True)
+        return self._json({"url": F.public_url(sid)})
+    if action == "formupload":
+        return self._json(F.save_answers(sid, json.loads(self._body(MAX_FORM).decode("utf-8") or "{}"), "файл"))
+    if action == "formapply":
+        return self._json(F.apply(sid, [str(k) for k in (self._jbody().get("keys") or [])]))
+    if action == "formclear":
+        F.clear(sid)
+        return self._json(F.review(sid))
     if action == "brief":
         return self._json(S.update_brief(sid, self._jbody()))
     if action == "logo":

@@ -35,7 +35,7 @@ function renderSites(v, top) {
     <div class="sub">${esc(L.lab.description || "")}</div></div>
     <button class="btn" id="toLabCtx">Контекст направления</button>`;
   v.innerHTML = `${spaceCards(L.labs, L.lab.id, false)}
-  <div class="panel"><div class="row"><h2>Сайты направления</h2><span class="spacer"></span><button class="btn primary sm" id="newSite">Новый сайт</button></div>
+  <div class="panel"><div class="row"><h2>Сайты направления</h2><span class="spacer"></span><button class="btn sm" id="ankImport" title="Файл «Ответы на анкету….json» от заказчика">Загрузить ответы анкеты</button><input type="file" id="ankImportIn" accept=".json,application/json" hidden><button class="btn primary sm" id="newSite">Новый сайт</button></div>
     <p class="hint" style="margin-bottom:12px">Бриф → ресёрч лидеров сферы, трендов и фото → 3 концепции с живыми превью → фото → идеальный промпт для Claude Code / Codex → сборка и проверка.</p>
     <div class="site-list">${L.projects.map((p, i) => `<button class="site-card" data-id="${esc(p.id)}" style="--i:${i}">
       ${p.logo ? `<img class="sc-logo" src="/files/sites/${esc(p.id)}/logo/${encodeURIComponent(p.logo)}" alt="">` : `<span class="sc-mono">${esc((p.name || "?").slice(0, 1))}</span>`}
@@ -50,6 +50,7 @@ function renderSites(v, top) {
   bindSpaceCards(false);
   $("#toLabCtx").onclick = () => { S.page = "lab"; render(); };
   $("#newSite").onclick = () => guard(newSite);
+  bindAnketaImport();
   v.querySelectorAll(".site-card").forEach((b) => (b.onclick = () => guard(async () => { await loadSite(b.dataset.id); S.page = "site"; S.siteTab = S.siteTab || "brief"; render(); })));
   $("#saveST").onclick = () => guard(async () => { await api(`/api/sites/taste?${lq()}`, { body: { text: $("#siteTaste").value } }); toast("Сохранено"); });
   $("#updST").onclick = () => guard(async () => startJob(await api(`/api/sites/taste/update?${lq()}`, { body: {} })));
@@ -75,7 +76,7 @@ function renderSite(v, top) {
 // ---------------------------------------------------------------- 1. бриф
 function siteBrief(t, s) {
   const B = s.brand;
-  t.innerHTML = `
+  t.innerHTML = `${anketaPanel()}
   <div class="panel"><h2>О компании</h2>
     <div class="grid2">
       <div class="field"><label>Название компании</label><input type="text" id="b_name" value="${esc(s.name)}"></div>
@@ -108,7 +109,10 @@ function siteBrief(t, s) {
     ${B.measured?.length ? `<p class="meta">Цвета, измеренные по логотипу: ${B.measured.map((h) => `<span class="dotc" style="background:${hexc(h)}"></span>${esc(h)}`).join(" ")}</p>` : ""}
     <div class="grid2"><div><h3>Шрифты</h3><p><b>${esc(B.fonts?.heading)}</b> — заголовки<br><b>${esc(B.fonts?.body)}</b> — текст<br><span class="meta">${esc(B.fonts?.why || "")}</span></p></div>
     <div><h3>Характер и тон</h3><p>${esc((B.personality || []).join(" · "))}</p><p class="meta">${esc(B.tone_of_voice)}</p></div>
-    <div><h3>Делать</h3>${listHtml(B.do)}</div><div><h3>Не делать</h3>${listHtml(B.dont)}</div></div></div>` : ""}`;
+    <div><h3>Делать</h3>${listHtml(B.do)}</div><div><h3>Не делать</h3>${listHtml(B.dont)}</div></div></div>` : ""}
+  <div class="panel danger-zone"><div class="row"><div><h2>Удалить сайт</h2>
+      <p class="hint" style="margin:0">Навсегда удалит бриф, ресёрч, концепции, фото, видео, промпты, все сборки и статистику этого сайта.</p></div>
+      <span class="spacer"></span><button class="btn danger" id="siteDel">Удалить сайт</button></div></div>`;
   t.querySelectorAll("#b_kind button").forEach((b) => (b.onclick = () => { t.querySelectorAll("#b_kind button").forEach((x) => x.classList.toggle("on", x === b)); $("#pagesBox").hidden = b.dataset.v === "landing"; }));
   t.querySelectorAll("#b_stack button").forEach((b) => (b.onclick = () => { t.querySelectorAll("#b_stack button").forEach((x) => x.classList.toggle("on", x === b)); }));
   bindLaunch(t);
@@ -120,6 +124,8 @@ function siteBrief(t, s) {
   drop.ondragover = (e) => { e.preventDefault(); drop.classList.add("over"); };
   drop.ondragleave = () => drop.classList.remove("over");
   drop.ondrop = (e) => { e.preventDefault(); drop.classList.remove("over"); up(e.dataTransfer.files[0]); };
+  bindAnketa(s);
+  $("#siteDel").onclick = () => guard(async () => { if (await deleteSite(s.id, s.name)) { S.page = "labhome"; render(); } });
   if ($("#logoRm")) $("#logoRm").onclick = () => guard(async () => { S.site = await api(`/api/sites/${s.id}/logoremove`, { body: {} }); render(); });
 }
 // сохранить бриф, если открыта вкладка «Бриф» (с других вкладок — ничего не делает)
