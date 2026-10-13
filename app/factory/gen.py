@@ -105,7 +105,7 @@ def _check_limit(est: float):
 
 
 def _nb2(job, product, prompt: str, images: list[Path], out: Path, resolution="2K") -> Path:
-    """Nano Banana 2 edit: картинка(и) + промт → одна картинка 9:16."""
+    """Nano Banana 2 edit: картинка(и) + промпт → одна картинка 9:16."""
     fal_client = _fal()
     urls = [_upload(fal_client, p) for p in images[:6]]
     try:

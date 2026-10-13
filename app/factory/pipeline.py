@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import time
+import uuid
 from pathlib import Path
 
 from . import store, media, llm, gen, montage, brains, publish, library
@@ -42,11 +43,17 @@ def add_file(pid: str, filename: str, data: bytes, label: str = "", source: str 
     d = _pdir(pid)
     safe = "".join(ch for ch in Path(filename).name if ch.isalnum() or ch in "._-") or "file"
     ext = Path(safe).suffix.lower()
+    if ext not in PHOTO_EXT and ext not in VIDEO_EXT:
+        raise ValueError(f"Неподдерживаемый формат: {ext or 'без расширения'}. Фото: jpg/png/heic, видео: mp4/mov.")
     raw = d / "inputs" / f"{int(time.time()*1000)}_{safe}"
     raw.write_bytes(data)
     if ext in PHOTO_EXT:
         out = d / "prepared" / (raw.stem + ".jpg")
-        media.prepare_photo(raw, out)
+        try:
+            media.prepare_photo(raw, out)
+        except Exception as e:
+            raw.unlink(missing_ok=True)
+            raise ValueError("Не получилось прочитать фото — файл повреждён или это не картинка.") from e
         item = {"file": out.name, "label": label, "orig": raw.name}
         if source:
             item["source"] = source
@@ -54,7 +61,11 @@ def add_file(pid: str, filename: str, data: bytes, label: str = "", source: str 
         return {"kind": "photo", **item}
     if ext in VIDEO_EXT:
         out = d / "prepared" / (raw.stem + "_5s.mp4")
-        media.prepare_video(raw, out, seconds=5.0)
+        try:
+            media.prepare_video(raw, out, seconds=5.0)
+        except Exception as e:
+            raw.unlink(missing_ok=True)
+            raise ValueError("Не получилось прочитать видео — файл повреждён или формат не поддерживается.") from e
         info = media.probe(out)
         # реставратор-lite: кадры из видео как дополнительные ракурсы
         frames = media.best_frames_from_video(out, d / "frames", n=4)
@@ -292,11 +303,19 @@ def add_hero_upload(pid, filename, data: bytes):
     d = _pdir(pid) / "cards"
     d.mkdir(parents=True, exist_ok=True)
     safe = "".join(ch for ch in Path(filename).name if ch.isalnum() or ch in "._-") or "hero.jpg"
-    raw = d / f"up_{int(time.time())}_{safe}"
-    raw.write_bytes(data)
+    ext = Path(safe).suffix.lower()
+    if ext not in PHOTO_EXT:
+        raise ValueError("Фото для финала: jpg, png, webp или heic.")
+    raw = d / f"_raw_{uuid.uuid4().hex[:8]}{ext}"
     out = d / f"hero_own_{int(time.time())}.jpg"
-    media.prepare_photo(raw, out, max_side=2400)
-    raw.unlink(missing_ok=True)
+    try:
+        raw.write_bytes(data)
+        media.prepare_photo(raw, out, max_side=2400)
+    except Exception as e:
+        out.unlink(missing_ok=True)
+        raise ValueError("Не получилось прочитать фото — файл повреждён или это не картинка.") from e
+    finally:
+        raw.unlink(missing_ok=True)
 
     def fn(x):
         x["heroes"] = [out.name] + x.get("heroes", [])

@@ -4,7 +4,7 @@
  → бренд-кит (цвета из логотипа + характер бренда)
  → ресёрч (поиск лидеров сферы и эталонов дизайна, скриншоты, разбор глазами)
  → стратег (3 концепции + живое превью первого экрана)
- → автор промтов (пакет для Claude Code / Codex: MASTER + страница за страницей + тексты)
+ → автор промптов (пакет для Claude Code / Codex: MASTER + страница за страницей + тексты)
  → сборка (Claude Code по подписке собирает статический сайт) → проверка по скриншотам → правки.
 """
 from __future__ import annotations
@@ -22,6 +22,7 @@ from pathlib import Path
 
 from .config import SITES, settings, int_setting
 from . import store
+from .safety import check_build_name, public_url
 
 _lock = threading.RLock()
 TASTE = SITES / "taste.md"
@@ -33,6 +34,17 @@ def pdir(sid: str) -> Path:
     if not re.fullmatch(r"[\w\-]+", sid or ""):
         raise ValueError("bad site id")
     return SITES / sid
+
+
+def build_dir(sid: str, bdir: str, must_exist=True) -> Path:
+    """Папка сборки: только builds/v<N>, и только если такая сборка есть в проекте."""
+    check_build_name(bdir)
+    b = pdir(sid) / "builds" / bdir
+    if must_exist:
+        p = json.loads((pdir(sid) / "project.json").read_text(encoding="utf-8"))
+        if not any(x.get("dir") == bdir for x in p.get("builds", [])) or not b.is_dir():
+            raise ValueError("Сборка не найдена")
+    return b
 
 
 def _slug(text: str) -> str:
@@ -179,7 +191,7 @@ def load(sid: str) -> dict:
     p = json.loads((pdir(sid) / "project.json").read_text(encoding="utf-8"))
     bd = pdir(sid) / "builds"
     known = {b["dir"] for b in p.get("builds", [])}
-    lost = [d for d in sorted(bd.iterdir(), key=lambda x: x.name) if d.is_dir() and d.name not in known] if bd.exists() else []
+    lost = [d for d in sorted(bd.iterdir(), key=lambda x: x.name) if d.is_dir() and d.name not in known and re.fullmatch(r"v\d{1,4}", d.name)] if bd.exists() else []
     if lost:   # сборка оборвалась до записи в проект — показываем её как незаконченную
         for d in lost:
             p.setdefault("builds", []).append({
@@ -211,11 +223,19 @@ BRIEF_KEYS = ("name", "sphere", "kind", "pages_n", "pages_wish", "audience", "go
 
 
 def update_brief(sid, data: dict):
+    from . import sitelaunch
+
     def fn(p):
         for k in BRIEF_KEYS:
             if k in data:
-                p[k] = data[k]
+                p[k] = str(data[k])[:4000] if k != "pages_n" else data[k]
+        if p.get("stack") not in STACKS:
+            p["stack"] = "static"
         p["pages_n"] = 1 if p.get("kind") == "landing" else max(2, min(30, int(p.get("pages_n") or 5)))
+        if "launch" in data:
+            p["launch"] = sitelaunch.clean(data["launch"])
+        if sitelaunch.needs_server(p):      # оплата и заявки требуют сервера: статический сайт так не умеет
+            p["stack"] = "nextjs_server"
     return update(sid, fn)
 
 
@@ -223,7 +243,7 @@ def stage(p) -> str:
     if p.get("builds"):
         return "сборка"
     if p.get("prompts"):
-        return "промт"
+        return "промпт"
     if (p.get("photos") or {}).get("slots"):
         return "фото"
     if p.get("concepts"):
@@ -407,6 +427,10 @@ def brief_text(p) -> str:
                  ("notes", "Пожелания")):
         if p.get(k):
             lines.append(f"{t}: {p[k]}")
+    from . import sitelaunch
+    lt2 = sitelaunch.text(p)
+    if lt2:
+        lines.append(lt2)
     return "\n".join(lines)
 
 
@@ -432,13 +456,43 @@ def run_brand(job, sid):
     data, meta = brains.ask("site_brand", prompt, images=[logo] if logo else None, schema=BRAND_SCHEMA,
                             temperature=0.6, job=job, timeout=600)
     data["measured"] = measured
+    data = _clean_brand(data)
     update(sid, lambda x: x.__setitem__("brand", data))
     job.say("Бренд-кит: " + data.get("summary", "")[:200])
     return data
 
 
+HEX_RE = re.compile(r"#[0-9a-fA-F]{3,8}")
+
+
+def _clean_brand(brand: dict) -> dict:
+    """Только известные поля бренд-кита и только ожидаемые типы; цвета — строго HEX."""
+    if not isinstance(brand, dict):
+        raise ValueError("Бренд-кит: ожидался объект")
+    s = lambda v, n=2000: str(v)[:n] if isinstance(v, (str, int, float)) else ""   # noqa: E731
+    out = {}
+    for k in ("summary", "tone_of_voice", "logo_notes"):
+        if k in brand:
+            out[k] = s(brand[k])
+    for k in ("personality", "do", "dont"):
+        if k in brand:
+            out[k] = [s(x, 400) for x in (brand[k] or [])[:20] if isinstance(x, str)]
+    if "colors" in brand:
+        cols = []
+        for c in (brand["colors"] or [])[:16]:
+            if isinstance(c, dict) and HEX_RE.fullmatch(str(c.get("hex", "")).strip()):
+                cols.append({"hex": str(c["hex"]).strip(), "role": s(c.get("role", ""), 60), "name": s(c.get("name", ""), 80)})
+        out["colors"] = cols
+    if "fonts" in brand and isinstance(brand["fonts"], dict):
+        out["fonts"] = {k: s(brand["fonts"].get(k, ""), 300) for k in ("heading", "body", "why")}
+    if "measured" in brand:
+        out["measured"] = [x for x in (brand["measured"] or [])[:12] if isinstance(x, str) and HEX_RE.fullmatch(x)]
+    return out
+
+
 def save_brand(sid, brand: dict):
-    return update(sid, lambda p: p.__setitem__("brand", {**(p.get("brand") or {}), **brand}))
+    clean = _clean_brand(brand)
+    return update(sid, lambda p: p.__setitem__("brand", {**_clean_brand(p.get("brand") or {}), **clean}))
 
 
 # ============================================================================= 2. ресёрч
@@ -481,16 +535,26 @@ def _screenshot(urls: list[str], out_dir: Path, job) -> dict:
         return {}
     shots = {}
     out_dir.mkdir(parents=True, exist_ok=True)
+    safe = [u for u in urls if public_url(u)]
+    for u in urls:
+        if u not in safe:
+            job.say(f"  пропускаю {u[:70]}: не публичный адрес (локальная сеть, localhost или не http/https)")
     try:
         with sync_playwright() as pw:
             br = pw.chromium.launch()
-            ctx = br.new_context(viewport={"width": 1440, "height": 900}, locale="ru-RU",
+            ctx = br.new_context(viewport={"width": 1440, "height": 900}, locale="ru-RU", service_workers="block",
+                                 accept_downloads=False,
                                  user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128 Safari/537.36")
+            ctx.route("**/*", _public_only_route())
             for i, url in enumerate(urls):
+                if url not in safe:
+                    continue
                 pg = ctx.new_page()
                 try:
                     job.say(f"  скриншот {i+1}/{len(urls)}: {url[:70]}")
-                    pg.goto(url, wait_until="domcontentloaded", timeout=30000)
+                    resp = pg.goto(url, wait_until="domcontentloaded", timeout=30000)
+                    if not public_url(pg.url) or (resp and not public_url(resp.url)):
+                        raise ValueError("страница ушла на непубличный адрес")
                     pg.wait_for_timeout(2500)
                     hero = out_dir / f"s{i+1}_hero.jpg"
                     full = out_dir / f"s{i+1}_full.jpg"
@@ -509,6 +573,39 @@ def _screenshot(urls: list[str], out_dir: Path, job) -> dict:
     except Exception as e:
         job.say(f"  скриншоты не получились: {str(e)[:200]} (если Playwright без браузера: python -m playwright install chromium)")
     return shots
+
+
+def _public_only_route(allow_file=False):
+    """Обработчик маршрутов Playwright: пропускает только публичные http(s)-адреса (защита от SSRF),
+    в том числе для редиректов, картинок, скриптов и фреймов страницы."""
+    cache = {}
+
+    def handler(route):
+        url = route.request.url
+        if url.startswith(("data:", "blob:")) or (allow_file and url.startswith("file:")):
+            return route.continue_()
+        from urllib.parse import urlparse as _up
+        try:
+            pu = _up(url)
+            key = (pu.scheme, pu.hostname, pu.port)
+        except ValueError:
+            return route.abort("blockedbyclient")
+        if key not in cache:
+            cache[key] = public_url(url)
+        if not cache[key]:
+            return route.abort("blockedbyclient")
+        # редиректы проходим вручную: каждый следующий адрес тоже проверяется до запроса
+        try:
+            resp = route.fetch(max_redirects=0, timeout=30000)
+        except Exception:
+            return route.abort("failed")
+        if 300 <= resp.status < 400:
+            from urllib.parse import urljoin
+            loc = resp.headers.get("location")
+            if not loc or not public_url(urljoin(url, loc)):
+                return route.abort("blockedbyclient")
+        return route.fulfill(response=resp)
+    return handler
 
 
 def _shrink(path: Path, width: int):
@@ -753,7 +850,7 @@ def choose(sid, idx: int, feedback: str = ""):
     return update(sid, lambda p: (p.__setitem__("chosen", int(idx)), p.__setitem__("feedback", feedback)))
 
 
-# ============================================================================= 4. автор промтов
+# ============================================================================= 4. автор промптов
 PACK_SCHEMA = {"type": "object", "properties": {
     "master": {"type": "string"},
     "pages": {"type": "array", "items": {"type": "object", "properties": {
@@ -769,18 +866,26 @@ STACKS = {
               "Файлы: index.html и по файлу на страницу (slug.html), css/style.css, js/main.js, assets/. Открывается двойным кликом.",
     "nextjs": "Next.js (App Router, последняя стабильная версия) + TypeScript + Tailwind CSS. Статический экспорт (output: 'export'). "
               "Страницы в app/<slug>/page.tsx, общие компоненты в components/, дизайн-токены в tailwind.config и CSS-переменных.",
+    "nextjs_server": "Next.js (App Router, последняя стабильная версия) + TypeScript + Tailwind CSS С СЕРВЕРНОЙ ЧАСТЬЮ "
+                     "(next start на Node.js, без output: 'export'): страницы в app/<slug>/page.tsx, серверные обработчики "
+                     "в app/api/*/route.ts (оплата, уведомления платёжного сервиса, заявки), секреты — только в переменных "
+                     "окружения (.env, в репозиторий — .env.example), общие компоненты в components/, логика в lib/.",
 }
+STACK_NAMES = {"static": "HTML/CSS", "nextjs": "Next.js (статический)", "nextjs_server": "Next.js с сервером"}
 
 
 def run_prompts(job, sid):
-    from . import brains
+    from . import brains, sitelaunch, sitevideo
     p = load(sid)
     if p.get("chosen") is None:
         raise ValueError("Сначала выбери концепцию.")
     c = p["concepts"][p["chosen"]]
     logo = p.get("logo")
-    prompt = f"""Ты — ведущий продуктовый дизайнер и тимлид фронтенда. Напиши ИДЕАЛЬНЫЙ пакет промтов, по которому Claude Code (или Codex)
-соберёт этот сайт за один проход без уточняющих вопросов. Промты — на русском, технические термины — как есть.
+    live = sitelaunch.get(p)["on"]
+    forms_rule = ("формы — настоящая серверная отправка заявок (см. INTEGRATIONS.md), с обязательным согласием на обработку ПДн"
+                  if live else "формы — отправка на заглушку с сообщением об успехе")
+    prompt = f"""Ты — ведущий продуктовый дизайнер и тимлид фронтенда. Напиши ИДЕАЛЬНЫЙ пакет промптов, по которому Claude Code (или Codex)
+соберёт этот сайт за один проход без уточняющих вопросов. Промпты — на русском, технические термины — как есть.
 
 ДАННЫЕ
 Бриф: {brief_text(p)}
@@ -792,28 +897,34 @@ def run_prompts(job, sid):
 Стек: {STACKS.get(p.get('stack') or 'static')}
 Логотип: {"лежит в assets/" + logo if logo else "нет — текстовый логотип по названию"}
 Фото: {photos_text(p)}
+Видео: {sitevideo.videos_text(p)}
+{sitelaunch.text(p)}
 
 ЧТО НАПИСАТЬ
-1) master — главный промт (он же CLAUDE.md проекта), Markdown, разделы:
+1) master — главный промпт (он же CLAUDE.md проекта), Markdown, разделы:
    «Роль и цель» · «Компания и аудитория» · «Концепция и настроение» · «Дизайн-система» (ВСЕ токены: цвета HEX с ролями,
    шрифты Google Fonts с весами, шкала размеров через clamp, отступы, радиусы, тени, сетка, брейкпоинты 360/768/1024/1440)
    · «Компоненты» (шапка, футер, кнопки и их состояния, карточки, формы, …) · «Анимация» (что, как, prefers-reduced-motion)
    · «Тексты и тон» · «Изображения» (если фото уже есть — используй файлы assets/photos/<id>.jpg из манифеста assets/photos/PHOTOS.json
    с их alt и пропорциями, обработку и кадрирование через CSS object-fit/object-position; для мест без фото — аккуратные
-   плейсхолдеры с подписью; без внешних стоков)
+   плейсхолдеры с подписью; без внешних стоков; готовые видео — assets/videos/<id>.mp4 с постером <id>.jpg из манифеста
+   assets/videos/VIDEOS.json: <video autoplay muted loop playsinline preload="metadata" poster>, при
+   prefers-reduced-motion и на медленной сети — только постер)
    · «Техника» (стек, структура файлов, семантика, SEO-мета и OG, разметка JSON-LD — ОДИН объект
-   {"@context": "https://schema.org", "@graph": [...]} и никогда не массив на верхнем уровне, доступность WCAG AA,
-   производительность, формы — отправка на заглушку с сообщением об успехе) · «Порядок работы» (сначала дизайн-система и общие компоненты, потом страницы
+   {{"@context": "https://schema.org", "@graph": [...]}} и никогда не массив на верхнем уровне, доступность WCAG AA,
+   производительность, {forms_rule}){" · «Боевая часть» (оплата, чеки, заявки, аналитика, юр. страницы — коротко, подробности в INTEGRATIONS.md и LEGAL.md)" if live else ""} · «Порядок работы» (сначала дизайн-система и общие компоненты, потом страницы
    по очереди, затем самопроверка) · «Критерии готовности» (чек-лист) · «Чего не делать».
-2) pages — по промту на каждую страницу концепции (в порядке концепции): для каждой секции — назначение, раскладка
+2) pages — по промпту на каждую страницу концепции (в порядке концепции): для каждой секции — назначение, раскладка
    на десктопе и мобиле, ТОЧНЫЕ тексты (заголовки, подзаголовки, кнопки, пункты), визуал, поведение.
 3) content — все тексты сайта одним документом (Markdown) по страницам — для редактирования владельцем.
 4) photos — список фото/иллюстраций, которые нужно снять или сгенерировать (что, где, пропорции).
 5) checklist — 12–20 проверяемых пунктов приёмки.
-Пиши конкретно: никаких «красивый», «современный» без расшифровки. Это должен быть лучший промт, который можно написать."""
-    job.say("Автор промтов пишет пакет для Claude Code…")
+Пиши конкретно: никаких «красивый», «современный» без расшифровки. Это должен быть лучший промпт, который можно написать."""
+    job.say("Автор промптов пишет пакет для Claude Code…")
     data, meta = brains.ask("site_prompt", prompt, schema=PACK_SCHEMA, temperature=0.5, job=job, timeout=1500)
     d = pdir(sid) / "prompts"
+    if (d / "MASTER.md").exists():
+        snapshot_prompts(sid, "перед новым пакетом")
     if d.exists():
         shutil.rmtree(d)
     (d / "pages").mkdir(parents=True)
@@ -829,20 +940,149 @@ def run_prompts(job, sid):
     (d / "CHECKLIST.md").write_text("# Приёмка\n\n" + "\n".join(f"- [ ] {x}" for x in data.get("checklist", [])) + "\n",
                                      encoding="utf-8")
     (d / "HOW_TO_USE.md").write_text(HOW_TO_USE, encoding="utf-8")
-    allin = ["# Пакет промтов — всё одним файлом\n", (d / "MASTER.md").read_text(encoding="utf-8")]
-    for f in sorted((d / "pages").glob("*.md")):
-        allin.append("\n---\n\n" + f.read_text(encoding="utf-8"))
-    allin.append("\n---\n\n" + (d / "CHECKLIST.md").read_text(encoding="utf-8"))
-    (d / "ALL_IN_ONE.md").write_text("\n".join(allin), encoding="utf-8")
-    files += ["CONTENT.md", "PHOTOS.md", "CHECKLIST.md", "HOW_TO_USE.md", "ALL_IN_ONE.md"]
-    info = {"files": files, "created": datetime.now().isoformat(timespec="seconds"), "concept": c.get("name"),
-            "pages": [x.get("title") for x in data.get("pages", [])], "by": meta.get("provider")}
-    update(sid, lambda x: x.__setitem__("prompts", info))
+    info = {"created": datetime.now().isoformat(timespec="seconds"), "concept": c.get("name"),
+            "pages": [x.get("title") for x in data.get("pages", [])], "by": meta.get("provider"), "edits": [],
+            "live": live}
+    update(sid, lambda x: x.__setitem__("prompts", {**info, "files": refresh_pack(sid)}))
     job.say(f"Пакет готов: MASTER + {len(data.get('pages', []))} страниц(ы) + тексты + чек-лист.")
-    return info
+    if live:
+        job.progress = 0.6
+        sitelaunch.run_launch_pack(job, sid)
+    files = refresh_pack(sid)
+    update(sid, lambda x: x["prompts"].__setitem__("files", files))
+    return {**info, "files": files}
 
 
-HOW_TO_USE = """# Как использовать пакет
+# ----------------------------------------------------------------- пакет: состав, история, правка по пожеланиям
+PACK_ORDER = ["MASTER.md", "pages/", "CONTENT.md", "PHOTOS.md", "INTEGRATIONS.md", "LEGAL.md", "CHECKLIST.md",
+              "LAUNCH.md", "HOW_TO_USE.md", "ALL_IN_ONE.md"]
+
+
+def refresh_pack(sid) -> list[str]:
+    """Пересобирает ALL_IN_ONE.md и возвращает список файлов пакета в правильном порядке."""
+    d = pdir(sid) / "prompts"
+    pages = sorted(f"pages/{f.name}" for f in (d / "pages").glob("*.md")) if (d / "pages").exists() else []
+    files = []
+    for k in PACK_ORDER:
+        if k == "pages/":
+            files += pages
+        elif k != "ALL_IN_ONE.md" and (d / k).exists():
+            files.append(k)
+    allin = ["# Пакет промптов — всё одним файлом\n"]
+    for f in files:
+        if f not in ("HOW_TO_USE.md", "LAUNCH.md", "CONTENT.md", "PHOTOS.md"):
+            allin.append((d / f).read_text(encoding="utf-8"))
+    (d / "ALL_IN_ONE.md").write_text("\n\n---\n\n".join(allin), encoding="utf-8")
+    return files + ["ALL_IN_ONE.md"]
+
+
+def snapshot_prompts(sid, reason: str) -> str:
+    """Копия пакета перед изменением (последние 15) — чтобы любую правку можно было откатить."""
+    d = pdir(sid) / "prompts"
+    hist = pdir(sid) / "prompts_history"
+    sn = datetime.now().strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:4]
+    shutil.copytree(d, hist / sn)
+    (hist / sn / "_reason.txt").write_text(reason[:300], encoding="utf-8")
+    old = sorted(x for x in hist.iterdir() if x.is_dir())
+    for x in old[:-15]:
+        shutil.rmtree(x, ignore_errors=True)
+    return sn
+
+
+def _pack_map(d: Path) -> str:
+    """Карта пакета: файл → его разделы (заголовки) — чтобы Claude сразу шёл в нужный файл."""
+    lines = []
+    for f in sorted(d.rglob("*.md")):
+        rel = f.relative_to(d).as_posix()
+        if rel in ("ALL_IN_ONE.md", "HOW_TO_USE.md"):
+            continue
+        txt = f.read_text(encoding="utf-8")
+        heads = [h.strip("# ").strip() for h in re.findall(r"^#{1,3} .+$", txt, flags=re.M)][:14]
+        lines.append(f"- {rel} ({len(txt)} симв.): " + " · ".join(heads))
+    return "\n".join(lines)
+
+
+EDIT_PROMPT = """В этой папке — пакет промптов, по которому Claude Code соберёт сайт. Владелец хочет изменения:
+
+«{wish}»
+
+КАРТА ПАКЕТА (файл → разделы):
+{pack_map}
+
+Где что лежит: MASTER.md — роль, компания, концепция, дизайн-система, компоненты, анимация, техника, порядок работы;
+pages/NN_slug.md — конкретная страница: секции, раскладка, точные тексты; CONTENT.md — все тексты сайта для владельца;
+PHOTOS.md — фото и видео; INTEGRATIONS.md — оплата, чеки, заявки, аналитика; LEGAL.md — юридические тексты;
+CHECKLIST.md — приёмка; LAUNCH.md — инструкция владельцу по запуску.
+
+КАК РАБОТАТЬ (быстро и точечно):
+1. По карте и Grep (ключевые слова пожелания) найди ТОЛЬКО затронутые файлы и места. Не читай файлы, которые не нужны.
+2. Правь инструментом Edit маленькими точными заменами. Не переписывай файлы целиком, не меняй то, о чём не просили.
+3. Держи пакет согласованным: поменял текст на странице — поправь его и в CONTENT.md; новый цвет/шрифт — только в
+   дизайн-системе MASTER.md; новая страница — новый файл pages/NN_slug.md (следующий номер) и упоминание в MASTER.md;
+   новое требование — пункт в CHECKLIST.md.
+4. ALL_IN_ONE.md и HOW_TO_USE.md не трогай — они пересоберутся сами.
+Не задавай вопросов. В конце одним списком: какие файлы изменил и что именно."""
+
+
+def run_prompt_edit(job, sid, wish: str):
+    """Пожелание владельца → Claude Code сам находит нужные .md и правит только их."""
+    from . import brains
+    from .config import settings as _s
+    wish = (wish or "").strip()
+    if not wish:
+        raise ValueError("Напиши, что поменять в промптах.")
+    p = load(sid)
+    d = pdir(sid) / "prompts"
+    if not p.get("prompts") or not (d / "MASTER.md").exists():
+        raise ValueError("Сначала напиши пакет промптов.")
+    sn = snapshot_prompts(sid, "до правки: " + wish)
+    before = {f.relative_to(d).as_posix(): f.read_bytes() for f in d.rglob("*.md")}
+    job.say("Claude Code ищет нужные файлы и правит только их…")
+    model = (_s().get("SITE_BUILD_MODEL") or "").strip() or "sonnet"
+    try:
+        res = brains.run_claude_code(job, EDIT_PROMPT.format(wish=wish[:4000], pack_map=_pack_map(d)), d,
+                                     tools=("Read", "Edit", "Write", "Glob", "Grep"), max_turns=60, timeout=20 * 60,
+                                     model=model, idle=420)
+        summary = res["summary"]
+    except brains.ClaudeCodeStopped as e:
+        summary = f"Правка остановлена: {e}. Изменённое сохранено, можно повторить пожелание."
+        job.say("  " + summary)
+    for f in list(d.rglob("*")):            # только .md внутри пакета; всё лишнее, что мог создать агент, убираем
+        if f.is_file() and f.suffix.lower() != ".md":
+            f.unlink(missing_ok=True)
+    after = {f.relative_to(d).as_posix(): f.read_bytes() for f in d.rglob("*.md")}
+    changed = sorted(k for k in after if k not in ("ALL_IN_ONE.md",) and before.get(k) != after[k])
+    files = refresh_pack(sid)
+    note = {"at": datetime.now().isoformat(timespec="seconds"), "wish": wish[:1000], "changed": changed,
+            "summary": summary[:1500], "snapshot": sn}
+    update(sid, lambda x: (x["prompts"].__setitem__("files", files), x["prompts"].setdefault("edits", []).append(note)))
+    job.say("Изменены: " + (", ".join(changed) if changed else "ничего (Claude не нашёл, что править — уточни пожелание)"))
+    return note
+
+
+def undo_prompt_edit(sid, snap: str):
+    """Вернуть пакет к состоянию до правки (текущий тоже сохраняется в историю)."""
+    if not re.fullmatch(r"[\w\-]{6,40}", snap or ""):
+        raise ValueError("Некорректная точка отката")
+    src = pdir(sid) / "prompts_history" / snap
+    if not src.is_dir():
+        raise ValueError("Такой копии уже нет")
+    snapshot_prompts(sid, "перед откатом")
+    d = pdir(sid) / "prompts"
+    shutil.rmtree(d, ignore_errors=True)
+    shutil.copytree(src, d)
+    (d / "_reason.txt").unlink(missing_ok=True)
+    files = refresh_pack(sid)
+
+    def fn(x):
+        x["prompts"]["files"] = files
+        for e in x["prompts"].get("edits", []):
+            if e.get("snapshot") == snap:
+                e["undone"] = True
+    return update(sid, fn)
+
+
+HOW_TO_USE = """# Как использовать пакет промптов
 
 ## Claude Code
 1. Создай пустую папку проекта, положи в неё логотип в `assets/`.
@@ -855,7 +1095,7 @@ HOW_TO_USE = """# Как использовать пакет
 То же самое: `MASTER.md` → `AGENTS.md` в корне проекта, дальше страницы по очереди.
 
 ## Одним сообщением
-Если инструмент принимает только один промт — вставь `ALL_IN_ONE.md`.
+Если инструмент принимает только один промпт — вставь `ALL_IN_ONE.md`.
 """
 
 
@@ -890,24 +1130,36 @@ def _count_files(b: Path) -> int:
     return sum(1 for f in b.rglob("*") if f.is_file() and not any(x in f.parts for x in ("_brief", "_review", "node_modules", ".next")))
 
 
-def _build_prompt(p, n_ph: int, extra: str) -> str:
+def _build_prompt(p, n_ph: int, extra: str, n_vid: int = 0) -> str:
+    from . import sitelaunch
     stack = p.get("stack") or "static"
-    return f"""Собери сайт в текущей папке по CLAUDE.md (главный промт).
+    live = sitelaunch.get(p)["on"]
+    doms = sitelaunch.doc_domains(p)
+    live_txt = ("БОЕВОЙ САЙТ: оплата, чеки, заявки и аналитика — строго по _brief/INTEGRATIONS.md, юр. страницы — по "
+                "_brief/LEGAL.md. Все ключи — только из переменных окружения (создай .env.example), секреты никогда не попадают "
+                "в клиентский код, суммы считаются на сервере, статус заказа меняется только по проверенному уведомлению. "
+                + (f"Перед кодом оплаты сверь точные поля и коды НДС с официальной документацией (WebFetch доступен для: "
+                   f"{', '.join(doms)}). " if doms else "")
+                + "В README.md — раздел «Запуск» (переменные, тестовый режим, деплой).") if live else ""
+    return f"""Собери сайт в текущей папке по CLAUDE.md (главный промпт).
 Страницы — файлы _brief/pages/*.md по порядку, тексты — _brief/CONTENT.md, приёмка — _brief/CHECKLIST.md.
 {"Логотип: assets/" + p["logo"] if p.get("logo") else "Логотипа-файла нет — сделай текстовый логотип."}
 {("Фото: в assets/photos лежат " + str(n_ph) + " готовых фото, их места и alt — в assets/photos/PHOTOS.json. Используй именно их, "
   "а плейсхолдеры — только там, где фото нет.") if n_ph else "Фото пока нет — аккуратные плейсхолдеры с подписью, что за фото."}
 Стек: {STACKS.get(stack)}
-{"Не запускай npm и сборку (их здесь может не быть) — только исходники проекта." if stack == "nextjs" else ""}
+{"Не запускай npm и сборку (их здесь может не быть) — только исходники проекта." if stack != "static" else ""}
+{("Видео: в assets/videos лежат " + str(n_vid) + " готовых видео с постерами, места — в assets/videos/VIDEOS.json. "
+  "Видео — muted autoplay loop playsinline с poster, на мобильных и при prefers-reduced-motion — постер.") if n_vid else ""}
+{live_txt}
 Работай экономно: не перечитывай одни и те же файлы, пиши файлы целиком сразу, без лишних черновиков.
-JSON-LD для поисковиков — один объект {"@context": "https://schema.org", "@graph": [...]}, не массив (массив ломает скрипты и расширения браузера).
+JSON-LD для поисковиков — один объект {{"@context": "https://schema.org", "@graph": [...]}}, не массив (массив ломает скрипты и расширения браузера).
 Порядок: 1) дизайн-система и общие стили/компоненты; 2) страницы и секции по очереди, полностью, с настоящими текстами;
 3) сверка с чек-листом и исправления. Не задавай вопросов. Не удаляй папку _brief. В конце коротко перечисли созданные файлы.
 {("ДОПОЛНИТЕЛЬНО ОТ ВЛАДЕЛЬЦА: " + extra) if extra else ""}"""
 
 
 CONTINUE_PROMPT = """Сборка сайта в этой папке была прервана ({why}) — продолжи с того места, где остановились.
-Главный промт — CLAUDE.md, страницы — _brief/pages/*.md, тексты — _brief/CONTENT.md, приёмка — _brief/CHECKLIST.md.
+Главный промпт — CLAUDE.md, страницы — _brief/pages/*.md, тексты — _brief/CONTENT.md, приёмка — _brief/CHECKLIST.md.
 1) Быстро осмотрись: Glob по проекту, открой только то, что нужно, чтобы понять, что уже готово.
 2) Доделай недостающее: незаконченные секции и страницы, общие компоненты, стили, подключение фото и логотипа.
    Готовые файлы не переписывай с нуля — только дописывай и исправляй.
@@ -930,10 +1182,10 @@ def _register(sid, bdir: str, patch: dict):
 
 def _run_sessions(job, sid, bdir: str, first_prompt: str | None, extra: str = ""):
     """Сессии Claude Code над одной сборкой: если сессия упёрлась во время/шаги — автоматически продолжаем."""
-    from . import brains
+    from . import brains, sitelaunch
     from .config import settings as _s
     p = load(sid)
-    b = pdir(sid) / "builds" / bdir
+    b = build_dir(sid, bdir, must_exist=False)
     minutes = max(10, int_setting("SITE_BUILD_MINUTES", 45))
     resumes = max(0, int_setting("SITE_BUILD_RESUMES", 3))
     model = (_s().get("SITE_BUILD_MODEL") or "").strip() or None
@@ -945,8 +1197,9 @@ def _run_sessions(job, sid, bdir: str, first_prompt: str | None, extra: str = ""
             prompt = CONTINUE_PROMPT.format(why=why, extra=("\nДОПОЛНИТЕЛЬНО ОТ ВЛАДЕЛЬЦА: " + extra) if extra else "")
         job.say(f"Сессия {k + 1}: Claude Code ({model or 'модель по умолчанию'}) работает, лимит {minutes} мин…")
         try:
+            tools, allowed = sitelaunch.build_tools(p)
             res = brains.run_claude_code(job, prompt, b, max_turns=int_setting("SITE_BUILD_TURNS", 150),
-                                         timeout=minutes * 60, model=model)
+                                         timeout=minutes * 60, model=model, tools=tools, allowed=allowed)
             total_steps += res.get("turns") or 0
             total_secs += res["seconds"]
             summary = res["summary"]
@@ -978,7 +1231,7 @@ def _run_sessions(job, sid, bdir: str, first_prompt: str | None, extra: str = ""
 def run_build(job, sid, extra: str = ""):
     p = load(sid)
     if not p.get("prompts"):
-        raise ValueError("Сначала сделай пакет промтов.")
+        raise ValueError("Сначала сделай пакет промптов.")
     n = 1 + max([int(b["dir"][1:]) for b in p.get("builds", []) if b["dir"][1:].isdigit()] or [0])
     bdir = f"v{n}"
     b = pdir(sid) / "builds" / bdir
@@ -991,19 +1244,21 @@ def run_build(job, sid, extra: str = ""):
     n_ph = copy_photos(p, b / "assets" / "photos")
     if n_ph:
         job.say(f"  фото для сайта: {n_ph} шт. → assets/photos")
+    from . import sitevideo
+    n_vid = sitevideo.copy_videos(p, b / "assets" / "videos")
+    if n_vid:
+        job.say(f"  видео для сайта: {n_vid} шт. → assets/videos")
     stack = p.get("stack") or "static"
     _register(sid, bdir, {"status": "running", "stack": stack, "pages": [], "files": 0,
                           "concept": (p["concepts"][p["chosen"]] or {}).get("name") if p.get("chosen") is not None else "",
                           "summary": "Идёт сборка…"})
-    done = _run_sessions(job, sid, bdir, _build_prompt(p, n_ph, extra), extra)
+    done = _run_sessions(job, sid, bdir, _build_prompt(p, n_ph, extra, n_vid), extra)
     return _after_build(job, sid, bdir, done)
 
 
 def run_resume(job, sid, bdir: str, extra: str = ""):
     """Продолжить незаконченную сборку с того места, где она остановилась."""
-    b = pdir(sid) / "builds" / bdir
-    if not b.exists():
-        raise ValueError("Сборка не найдена")
+    build_dir(sid, bdir)
     _register(sid, bdir, {"status": "running", "summary": "Продолжаю сборку…"})
     done = _run_sessions(job, sid, bdir, None, extra)
     return _after_build(job, sid, bdir, done)
@@ -1044,7 +1299,8 @@ def _shoot_build(b: Path, pages: list[str], job) -> list[Path]:
     with sync_playwright() as pw:
         br = pw.chromium.launch()
         for vw, vh, tag in ((1440, 900, "desktop"), (390, 844, "mobile")):
-            pg = br.new_page(viewport={"width": vw, "height": vh})
+            pg = br.new_page(viewport={"width": vw, "height": vh}, service_workers="block")
+            pg.route("**/*", _public_only_route(allow_file=True))
             for name in pages[:8]:
                 try:
                     pg.goto((b / name).resolve().as_uri(), wait_until="load", timeout=30000)
@@ -1067,7 +1323,7 @@ def _shoot_build(b: Path, pages: list[str], job) -> list[Path]:
 def run_review(job, sid, bdir: str):
     from . import brains
     p = load(sid)
-    b = pdir(sid) / "builds" / bdir
+    b = build_dir(sid, bdir)
     pages = _site_pages(b)
     job.say("Проверяю сайт по скриншотам (десктоп и мобильный)…")
     shots = _shoot_build(b, pages, job)
@@ -1094,7 +1350,7 @@ def run_fix(job, sid, bdir: str, extra: str = "", use_review=True):
     """Доработка существующей сборки: замечания проверяющего + пожелания владельца."""
     from . import brains
     p = load(sid)
-    b = pdir(sid) / "builds" / bdir
+    b = build_dir(sid, bdir)
     bb = next((x for x in p["builds"] if x["dir"] == bdir), None)
     if not bb:
         raise ValueError("Сборка не найдена")
@@ -1109,9 +1365,12 @@ def run_fix(job, sid, bdir: str, extra: str = "", use_review=True):
     job.say("Claude Code вносит правки…")
     from .config import settings as _s
     try:
+        from . import sitelaunch
+        tools, allowed = sitelaunch.build_tools(p)
         res = brains.run_claude_code(job, prompt, b, max_turns=int_setting("SITE_BUILD_TURNS", 150),
                                      timeout=max(10, int_setting("SITE_BUILD_MINUTES", 45)) * 60,
-                                     model=(_s().get("SITE_BUILD_MODEL") or "").strip() or None)
+                                     model=(_s().get("SITE_BUILD_MODEL") or "").strip() or None,
+                                     tools=tools, allowed=allowed)
     except brains.ClaudeCodeStopped as e:
         res = {"summary": f"Правки не закончены: {e}", "files": e.files, "turns": e.steps, "seconds": e.seconds}
         job.say(f"  {e} Можно нажать «Исправить» ещё раз — Claude продолжит.")
@@ -1162,25 +1421,27 @@ def make_zip(sid, what: str) -> Path:
         src = d / "prompts"
         name = f"{p['id']}_prompts.zip"
     else:
-        src = d / "builds" / what
+        src = build_dir(sid, what)
         name = f"{p['id']}_{what}.zip"
     if not src.exists():
         raise ValueError("Нечего скачивать")
     out = d / name
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
         for f in src.rglob("*"):
-            if f.is_file() and "_review" not in f.parts and "node_modules" not in f.parts:
+            if f.is_file() and not f.is_symlink() and "_review" not in f.parts and "node_modules" not in f.parts:
                 z.write(f, f.relative_to(src))
         if what == "prompts" and logo_path(p):
             z.write(logo_path(p), f"assets/{p['logo']}")
         if what == "prompts":
-            tmp = d / "_zip_photos"
-            if tmp.exists():
-                shutil.rmtree(tmp)
-            if copy_photos(p, tmp):
-                for f in tmp.iterdir():
-                    z.write(f, f"assets/photos/{f.name}")
-            shutil.rmtree(tmp, ignore_errors=True)
+            from . import sitevideo
+            for sub, fn in (("photos", copy_photos), ("videos", sitevideo.copy_videos)):
+                tmp = d / f"_zip_{sub}"
+                if tmp.exists():
+                    shutil.rmtree(tmp)
+                if fn(p, tmp):
+                    for f in tmp.iterdir():
+                        z.write(f, f"assets/{sub}/{f.name}")
+                shutil.rmtree(tmp, ignore_errors=True)
     return out
 
 
@@ -1199,7 +1460,12 @@ PHOTO_PLAN_SCHEMA = {"type": "object", "properties": {
         "id": {"type": "string"}, "page": {"type": "string"}, "section": {"type": "string"},
         "purpose": {"type": "string"}, "aspect": {"type": "string", "enum": ASPECTS},
         "subject_ru": {"type": "string"}, "prompt_en": {"type": "string"}, "alt_ru": {"type": "string"}},
-        "required": ["id", "page", "section", "aspect", "subject_ru", "prompt_en", "alt_ru"]}}},
+        "required": ["id", "page", "section", "aspect", "subject_ru", "prompt_en", "alt_ru"]}},
+    "video_slots": {"type": "array", "items": {"type": "object", "properties": {
+        "id": {"type": "string"}, "page": {"type": "string"}, "section": {"type": "string"},
+        "purpose": {"type": "string"}, "aspect": {"type": "string", "enum": ["16:9", "9:16", "1:1"]},
+        "subject_ru": {"type": "string"}, "prompt_en": {"type": "string"}, "duration": {"type": "integer"}},
+        "required": ["id", "page", "section", "aspect", "subject_ru", "prompt_en"]}}},
     "required": ["style", "slots"]}
 
 ENHANCE_MODES = {
@@ -1265,10 +1531,13 @@ def run_photo_plan(job, sid):
 
 Сделай:
 - style: единый фотостиль сайта (свет, цветокоррекция, композиция, люди, чего избегать) и prompt_suffix_en — английский
-  хвост, который добавляется к каждому промту генерации, чтобы все фото были в одном стиле.
+  хвост, который добавляется к каждому промпту генерации, чтобы все фото были в одном стиле.
 - slots: 6–14 мест под фото по страницам и секциям концепции (hero обязательно). id — латиницей (hero, about-team, service-1…),
-  aspect — пропорция места на сайте, subject_ru — что в кадре, alt_ru — alt-текст, prompt_en — подробный промт генерации
+  aspect — пропорция места на сайте, subject_ru — что в кадре, alt_ru — alt-текст, prompt_en — подробный промпт генерации
   (сюжет, люди, место, ракурс, свет, объектив), фотореализм, без текста и логотипов в кадре.
+- video_slots: 0–3 места, где короткое видео (5–10 с, без звука, по кругу) реально усиливает сайт: фон первого экрана,
+  процесс работы, товар в деле. Не добавляй видео ради видео. aspect — 16:9, 9:16 или 1:1; prompt_en — движение в кадре
+  и камеры (медленно, плавно), duration — 5 или 10.
 Всё, кроме prompt_en/prompt_suffix_en, — по-русски. Ответ — JSON."""
     job.say("Фотодиректор составляет план фото…")
     data, _ = brains.ask("site_strategy", prompt, schema=PHOTO_PLAN_SCHEMA, temperature=0.7, job=job, timeout=900)
@@ -1282,8 +1551,12 @@ def run_photo_plan(job, sid):
                       "variants": [], "chosen": None})
     update(sid, lambda x: x.__setitem__("photos", {"style": data.get("style"), "slots": slots,
                                                   "uploads": old.get("uploads", [])}))
-    job.say(f"План: {len(slots)} мест под фото. Стиль: {(data.get('style') or {}).get('summary', '')[:200]}")
-    return {"slots": len(slots)}
+    from . import sitevideo
+    sitevideo.set_plan_slots(sid, data.get("video_slots") or [])
+    nv = len((data.get("video_slots") or [])[:4])
+    job.say(f"План: {len(slots)} мест под фото{f' и {nv} под видео' if nv else ''}. "
+            f"Стиль: {(data.get('style') or {}).get('summary', '')[:200]}")
+    return {"slots": len(slots), "videos": nv}
 
 
 def _slot(p, slot_id):

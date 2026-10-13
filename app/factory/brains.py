@@ -23,7 +23,7 @@ class BrainError(RuntimeError):
 
 SYSTEM = ("Ты — агент студии: контент-завод рекламных роликов и лаборатория сайтов. Работаешь в конвейере без человека рядом: "
           "не задавай вопросов, не проси подтверждений, сразу выполняй задание. Отвечай по-русски, "
-          "промты для видеомоделей пиши по-английски. Если задан формат ответа — строго соблюдай его.")
+          "промпты для видеомоделей пиши по-английски. Если задан формат ответа — строго соблюдай его.")
 
 # ----------------------------------------------------------------------------- Claude (CLI)
 _BIN_CANDIDATES = ["~/.local/bin/claude", "~/.claude/local/claude", "/opt/homebrew/bin/claude",
@@ -77,7 +77,11 @@ def claude_status(force=False) -> dict:
                     st["logged_in"] = bool(j["loggedIn"])
                 else:
                     st["logged_in"] = r.returncode == 0 and j.get("authMethod") not in (None, "none")
-                st["email"] = j.get("email") or (j.get("account") or {}).get("email")
+                em = j.get("email") or (j.get("account") or {}).get("email") or ""
+                if "@" in em:     # наружу — только замаскированный адрес
+                    u, _, dom = em.partition("@")
+                    em = (u[:1] + "***@" + dom) if u else ""
+                st["email"] = em or None
             except json.JSONDecodeError:
                 # старые версии без `auth status`: считаем, что вход есть, ошибку покажет сам запрос
                 st["logged_in"] = True
@@ -174,7 +178,7 @@ class ClaudeCodeStopped(BrainError):
 
 
 def run_claude_code(job, prompt: str, cwd: Path, tools=("Read", "Write", "Edit", "Glob", "Grep"),
-                    max_turns=120, timeout=3600, model=None, idle=900) -> dict:
+                    max_turns=120, timeout=3600, model=None, idle=900, allowed=None) -> dict:
     """Claude Code как разработчик: работает с файлами в папке cwd, журнал действий идёт в задачу.
     Использует подписку (OAuth), как и остальные роли.
     Сторож останавливает сессию по общему времени (timeout) или если Claude молчит дольше idle секунд."""
@@ -183,7 +187,7 @@ def run_claude_code(job, prompt: str, cwd: Path, tools=("Read", "Write", "Edit",
     if not b:
         raise BrainError("Claude Code не установлен. Установи: curl -fsSL https://claude.ai/install.sh | bash, затем войди командой claude.")
     cmd = [b, "-p", prompt, "--output-format", "stream-json", "--verbose", "--no-session-persistence",
-           "--append-system-prompt", SYSTEM, "--tools", ",".join(tools), "--allowedTools", ",".join(tools),
+           "--append-system-prompt", SYSTEM, "--tools", ",".join(tools), "--allowedTools", ",".join(allowed or tools),
            "--permission-mode", "acceptEdits", "--strict-mcp-config", "--max-turns", str(max_turns)]
     model = model or (settings().get("CLAUDE_MODEL") or "").strip()
     if model:
@@ -226,7 +230,9 @@ def run_claude_code(job, prompt: str, cwd: Path, tools=("Read", "Write", "Edit",
                         if c.get("name") in ("Write", "Edit", "MultiEdit") and fp:
                             files.add(fp)
                         name = {"Write": "пишет", "Edit": "правит", "MultiEdit": "правит", "Read": "читает",
-                                "Glob": "ищет", "Grep": "ищет"}.get(c.get("name"), c.get("name"))
+                                "Glob": "ищет", "Grep": "ищет", "WebFetch": "читает документацию"}.get(c.get("name"), c.get("name"))
+                        if c.get("name") == "WebFetch":
+                            fp = inp.get("url") or fp
                         rel = str(fp).replace(str(cwd), "").lstrip("/")
                         job.say(f"  Claude {name} {rel}"[:160])
                     elif c.get("type") == "text" and c.get("text", "").strip():

@@ -36,18 +36,47 @@ rsync -av --exclude .venv ~/Documents/content-factory/ user@server:/home/factory
 съёмки «По изделиям». Если ставишь сервер через `git clone`, сначала `sudo apt install -y git-lfs && git lfs install`,
 иначе в `library/` окажутся текстовые заглушки вместо фото и видео.
 
-## 4. Доступ из браузера
+## 4. Доступ из браузера (только через HTTPS)
 
-В `.env` на сервере:
+Студия слушает только `127.0.0.1`, а наружу её открывает nginx с HTTPS. В `.env` на сервере (руками — через
+интерфейс эти настройки не меняются):
 
 ```
-HOST=0.0.0.0
+HOST=127.0.0.1
 AUTH_USER=admin
-AUTH_PASSWORD=длинный-пароль
+AUTH_PASSWORD=длинный-случайный-пароль-от-12-символов
+ALLOWED_HOSTS=studio.example.com
 ```
 
-Без пароля сервер наружу не откроется. Для постоянной работы лучше поставить перед ним nginx с HTTPS
-(Let's Encrypt) и оставить `HOST=127.0.0.1`.
+`ALLOWED_HOSTS` — домен, по которому открываешь студию: запросы с другими именами хоста отклоняются
+(защита от DNS rebinding). После 8 неверных паролей подряд адрес блокируется на 15 минут.
+
+nginx (`/etc/nginx/sites-available/studio`), сертификат — `sudo certbot --nginx -d studio.example.com`:
+
+```
+limit_req_zone $binary_remote_addr zone=studio:10m rate=10r/s;
+
+server {
+    listen 443 ssl http2;
+    server_name studio.example.com;
+    # ssl_certificate … — допишет certbot
+    add_header Strict-Transport-Security "max-age=31536000" always;
+    client_max_body_size 500m;
+
+    location / {
+        limit_req zone=studio burst=40 nodelay;
+        proxy_pass http://127.0.0.1:8765;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_read_timeout 600s;
+    }
+}
+server { listen 80; server_name studio.example.com; return 301 https://$host$request_uri; }
+```
+
+Без пароля, с паролем короче 12 символов или с `HOST=0.0.0.0` без `PUBLIC_HTTP=1` студия наружу не откроется —
+слушает только `127.0.0.1`. `PUBLIC_HTTP=1` (открыть наружу по голому HTTP) не рекомендуется: пароль пойдёт по сети
+открытым текстом.
 
 ## 5. Автозапуск
 

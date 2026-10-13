@@ -44,6 +44,7 @@ button,input,select,textarea{font:inherit;color:inherit}
 .panel h2{font-size:18px;font-weight:600;margin:0 0 4px}
 .panel .hint{color:var(--muted);font-size:14px;margin:0 0 14px;max-width:72ch}
 .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:12px 14px}
 .field{display:flex;flex-direction:column;gap:5px;margin-bottom:12px}
 .field label{font-size:13px;color:var(--muted)}
 input[type=text],input[type=password],input[type=number],select,textarea{background:#fff;border:1px solid var(--line);border-radius:8px;padding:9px 11px;width:100%}
@@ -354,7 +355,7 @@ html[data-vt="space"]::view-transition-new(root){animation:vt-in .38s cubic-bezi
 @keyframes vt-out{to{opacity:0;transform:translateY(-6px)}}
 @keyframes vt-in{from{opacity:0;transform:translateY(8px)}}
 
-@media (max-width:900px){.grid-home{grid-template-columns:1fr}.prompt-ed{grid-template-columns:1fr}.concepts3{grid-template-columns:1fr}.app{grid-template-columns:1fr}.rail{position:static;height:auto}.grid2,.stats{grid-template-columns:1fr}.main{padding:18px}}
+@media (max-width:900px){.grid-home{grid-template-columns:1fr}.prompt-ed{grid-template-columns:1fr}.concepts3{grid-template-columns:1fr}.app{grid-template-columns:1fr}.rail{position:static;height:auto}.grid2,.grid3,.stats{grid-template-columns:1fr}.main{padding:18px}}
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
 
 /* библиотека «По изделиям» */
@@ -377,3 +378,19 @@ html[data-vt="space"]::view-transition-new(root){animation:vt-in .38s cubic-bezi
 .lib-info{display:flex;gap:10px;align-items:flex-start;background:var(--mist);border-radius:10px;padding:10px 12px;margin:0 0 12px;font-size:14px;line-height:1.45}
 .lib-info input{margin-top:3px;width:16px;height:16px;accent-color:var(--emerald);flex:none}
 .lib-info.err{background:var(--red-s);color:var(--red)}
+
+/* запуск, правки промптов, видео */
+.launch.on{border-color:var(--emerald);box-shadow:0 0 0 1px var(--emerald-s)}
+.launch h3{margin:16px 0 8px}
+.pfiles button.chg::after{content:" ●";color:var(--emerald)}
+.edits{list-style:none;padding:0;margin:12px 0 0;display:flex;flex-direction:column;gap:8px}
+.edits li{border:1px solid var(--line,#e3e6ea);border-radius:10px;padding:10px 12px}
+.edits li.undone{opacity:.55}
+.edits .chips{display:flex;flex-wrap:wrap;gap:4px;margin:6px 0}
+.edits .chips span{font:11.5px ui-monospace,Menlo,monospace;background:var(--mist);border-radius:6px;padding:2px 6px}
+.vslot .slot-img video{width:100%;height:100%;object-fit:cover;display:block;background:#111}
+.vars .vv img{width:58px;height:44px}
+.up video,.up .poster{width:140px;height:105px;object-fit:cover;border-radius:8px;display:block;margin-bottom:4px;background:#111}
+.vadd{display:grid;grid-template-columns:1fr 1fr 110px auto;gap:8px;align-items:end;margin-top:10px}
+@media (max-width:900px){.vadd{grid-template-columns:1fr}}
+[hidden]{display:none!important}

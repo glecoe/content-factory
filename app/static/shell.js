@@ -231,7 +231,7 @@ const NICHE_GROUPS = [
   ["О нише", [["name", "Название"], ["description", "Что продаём", 3], ["audience", "Аудитория", 2], ["tone", "Тон и настроение бренда", 2], ["markets", "Рынки"]]],
   ["Для нейросетей", [["product_ru", "Товар одним словом (RU)"], ["product_en", "Товар одним словом (EN)"], ["use_ru", "Как товар показывают в деле (RU)"],
     ["use_en", "In-use shot (EN)"], ["model_en", "Кто/что в ИИ-кадрах (EN)", 2], ["fidelity_en", "Что нельзя менять в товаре (EN)", 2],
-    ["passport_en", "Что описывать в паспорте товара (EN)", 2], ["look_en", "Стиль рекламы (EN)", 2], ["negative_en", "Негативный промт (EN)", 3]]],
+    ["passport_en", "Что описывать в паспорте товара (EN)", 2], ["look_en", "Стиль рекламы (EN)", 2], ["negative_en", "Негативный промпт (EN)", 3]]],
 ];
 function renderNicheCtx(v, top) {
   const N = S.state.niche;
@@ -262,7 +262,7 @@ function renderLabCtx(v, top) {
   const F = [["name", "Название"], ["description", "Какие сайты делаем, для кого", 3], ["audience", "Клиенты направления", 2],
     ["style", "Предпочтения по стилю", 2], ["notes", "Правила и ограничения (что обязательно, чего нельзя)", 3]];
   top.innerHTML = `<div><div class="eyebrow">Лаборатория сайтов · направление</div><h1>Контекст: ${esc(L.name)}</h1>
-    <div class="sub">Получают все агенты направления: ресёрчер, стратег, фотодиректор, автор промтов и сборщик.</div></div>`;
+    <div class="sub">Получают все агенты направления: ресёрчер, стратег, фотодиректор, автор промптов и сборщик.</div></div>`;
   v.innerHTML = `<div class="panel"><div class="grid2">${F.map(([k, label, rows]) => `<div class="field ${rows === 3 ? "span2" : ""}"><label>${label}</label>${rows
       ? `<textarea data-k="${k}" style="min-height:${rows * 30 + 20}px">${esc(L[k] || "")}</textarea>` : `<input type="text" data-k="${k}" value="${esc(L[k] || "")}">`}</div>`).join("")}</div>
     <div class="row"><button class="btn primary" id="lSave">Сохранить</button><span class="spacer"></span>
@@ -295,7 +295,7 @@ function renderSettings(v, top) {
       <tr><td>Вход</td><td>${cl.logged_in ? `выполнен (${esc(cl.method || "")}${cl.email ? ", " + esc(cl.email) : ""})` : "не выполнен — в Терминале набери <code>claude</code> и войди"}</td></tr></table>
     <div class="grid2" style="margin-top:12px">
       <div class="field"><label>Модель Claude</label><select data-s="CLAUDE_MODEL">${opt("opus", st.claude_model, "Opus — лучшее качество")}${opt("sonnet", st.claude_model, "Sonnet — быстрее, меньше тратит лимит")}${opt("haiku", st.claude_model, "Haiku — самый экономный")}</select></div>
-      <div class="field"><label>Путь к claude (если не находится сам)</label><input type="text" data-s="CLAUDE_BIN" value="${esc(st.claude_bin || "")}" placeholder="~/.local/bin/claude"></div></div>
+      <div class="field"><label>Путь к claude</label><p class="meta">${st.claude_bin ? esc(st.claude_bin) : "находится автоматически"} · меняется только в файле <code>.env</code> (CLAUDE_BIN)</p></div></div>
     <div class="field"><label>Токен для сервера (CLAUDE_CODE_OAUTH_TOKEN) ${st.oauth_token_set ? "— сохранён; «-» чтобы стереть" : ""}</label><input type="password" autocomplete="new-password" data-s="CLAUDE_CODE_OAUTH_TOKEN" placeholder="${st.oauth_token_set ? "••••••••" : "необязательно на Mac"}"></div>
     <div class="row"><button class="btn" id="testC" ${cl.installed ? "" : "disabled"}>Проверить Claude</button><button class="btn ghost" id="reC">Обновить статус</button></div></div>
   <div class="panel"><h2>Ключи</h2>
@@ -306,11 +306,11 @@ function renderSettings(v, top) {
       <div class="field"><label>Дневной лимит трат fal.ai, $ (на оба цеха)</label><input type="number" data-s="DAILY_LIMIT_USD" min="0" step="1" value="${st.daily_limit_usd}"></div></div>
     <label class="row" style="gap:8px"><input type="checkbox" data-s="DEMO_MODE" data-check="1" ${st.demo_flag ? "checked" : ""}> Демо-режим: fal.ai не вызывается, вместо генераций — бесплатные заглушки</label></div>
   <div class="panel"><h2>Сервер</h2>
-    <p class="hint">На Mac не трогай. На сервере: HOST 0.0.0.0 и обязательно пароль. Применяется после перезапуска.</p>
-    <div class="grid2"><div class="field"><label>HOST</label><input type="text" data-s="HOST" value="${esc(st.host)}"></div>
-      <div class="field"><label>PORT</label><input type="text" data-s="PORT" value="${esc(st.port)}"></div>
-      <div class="field"><label>Логин</label><input type="text" data-s="AUTH_USER" value="${esc(st.auth_user)}"></div>
-      <div class="field"><label>Пароль ${st.password_set ? "— задан; «-» чтобы снять" : ""}</label><input type="password" autocomplete="new-password" data-s="AUTH_PASSWORD" placeholder="${st.password_set ? "••••••••" : "не задан"}"></div></div></div>
+    <p class="hint">Эти настройки ради безопасности меняются только руками в файле <code>.env</code> в папке проекта (потом перезапуск). Как открыть студию на сервере — в <code>SERVER.md</code>.</p>
+    <table class="kv">
+      <tr><td>Адрес</td><td>${esc(st.host || "127.0.0.1")}:${esc(st.port || "8765")}</td></tr>
+      <tr><td>Пароль</td><td>${st.password_set ? `задан (логин ${esc(st.auth_user || "admin")})` : "не задан — студия доступна только с этого компьютера"}</td></tr>
+      ${st.allowed_hosts ? `<tr><td>Разрешённые домены</td><td>${esc(st.allowed_hosts)}</td></tr>` : ""}</table></div>
   <div class="panel"><h2>Проверка компьютера</h2><table>
     <tr><td>FFmpeg</td><td>${tools.ffmpeg ? "найден" : "не найден — <code>brew install ffmpeg</code>"}</td></tr>
     <tr><td>Кодек видео</td><td>${esc(tools.encoder || "—")}</td></tr>
@@ -325,7 +325,7 @@ function renderSettings(v, top) {
     ${roles((r) => !r.startsWith("site_"))}<p class="meta">Контролёр кадров и разбор видео — Gemini (видит видео); без ключа — Claude по кадрам.</p></div>
   <div class="panel"><h2>Библиотека съёмки</h2>
     <p class="hint">Фото и видео «По изделиям» лежат в <code>library/</code> проекта, по папке на изделие.</p>
-    <div class="field"><label>Другая папка библиотеки (пусто — <code>library/</code>)</label><input type="text" data-s="LIBRARY_DIR" value="${esc(st.library_dir || "")}" placeholder="library"></div></div>`,
+    <p class="meta">Папка: ${st.library_dir ? esc(st.library_dir) : "<code>library/</code> в проекте"} · другую папку можно указать только в файле <code>.env</code> (LIBRARY_DIR).</p></div>`,
     lab: `
   <div class="panel"><h2>Ресёрч и сборка</h2><div class="grid2">
     <div class="field"><label>Скриншоты сайтов-референсов</label><select data-s="SITE_SHOTS">${opt("1", st.site_shots ? "1" : "0", "делать (нужен Playwright)")}${opt("0", st.site_shots ? "1" : "0", "не делать — только текстовый ресёрч")}</select></div>

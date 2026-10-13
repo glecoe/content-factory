@@ -3,13 +3,18 @@ const $ = (s, el = document) => el.querySelector(s);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const S = { state: null, product: null, page: "home", tab: "item", selected: new Set(), jobs: {}, research: null,
   mode: "factory", niche: "", lab: "", sites: null, site: null };
+// цвет — только HEX (иначе прозрачный); ссылка — только http(s) (иначе «#»)
+const hexc = (h) => (/^#[0-9a-fA-F]{3,8}$/.test(String(h ?? "").trim()) ? String(h).trim() : "transparent");
+const safeUrl = (u) => { try { const x = new URL(String(u ?? ""), location.href); return /^https?:$/.test(x.protocol) ? x.href : "#"; } catch { return "#"; } };
 const nq = () => (S.niche ? `niche=${encodeURIComponent(S.niche)}` : "");
 const lq = () => (S.lab ? `lab=${encodeURIComponent(S.lab)}` : "");
 const TAGS = ["свет", "темп", "хук", "модель", "рука", "кольцо не то", "музыка", "плашка", "скучно", "дорого выглядит", "тренд зашёл"];
 const TYPE_NAMES = { A: "макро", B: "на руке", C: "ИИ-модель", D: "атмосфера" };
 
+const STUDIO_TOKEN = document.querySelector('meta[name="studio-token"]')?.content || "";
 async function api(path, opts = {}) {
-  const o = { method: opts.method || (opts.body !== undefined ? "POST" : "GET"), headers: {} };
+  const o = { method: opts.method || (opts.body !== undefined ? "POST" : "GET"),
+    headers: { "X-Requested-With": "studio", "X-Studio-Token": STUDIO_TOKEN }, credentials: "same-origin" };
   if (opts.raw) { o.body = opts.raw; o.method = "POST"; }
   else if (opts.body !== undefined) { o.body = JSON.stringify(opts.body); o.headers["Content-Type"] = "application/json"; }
   const r = await fetch(path, o);
@@ -571,7 +576,7 @@ function renderResearch(v, top) {
       <div><h3>Визуал</h3><p>Свет: ${esc(B.visual?.light || "—")}<br>Цвета: ${esc(B.visual?.colors || "—")}<br>Фоны: ${esc(B.visual?.backgrounds || "—")}</p></div>
       <div><h3>Музыка и эксперименты</h3>${list([...(B.music_moods || []), ...(B.experiments || []).map((e) => "Эксперимент: " + e)])}</div>
     </div>
-    ${(B.sources || []).length ? `<h3>Источники</h3><ol class="src">${B.sources.map((s) => `<li><a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.title || s.url)}</a></li>`).join("")}</ol>` : ""}`
+    ${(B.sources || []).length ? `<h3>Источники</h3><ol class="src">${B.sources.map((s) => `<li><a href="${esc(safeUrl(s.url))}" target="_blank" rel="noopener noreferrer">${esc(s.title || s.url)}</a></li>`).join("")}</ol>` : ""}`
     : `<p class="hint">Брифа ещё нет. Проверь, что ищем (ниже), и нажми «Запустить ресёрч» — это займёт 3–10 минут.</p>`;
   v.innerHTML = `
   <div class="panel"><div class="row"><h2>Активный бриф ${R.active ? "· " + esc(R.active) : ""}</h2><span class="spacer"></span>
@@ -767,7 +772,9 @@ async function pollJobs() {
           toast(j.status === "done" ? `${j.title}: готово` : `${j.title}: ошибка — подробности в окне задачи`, j.status !== "done");
           await refresh();
         } else if (S.site && S.page === "site") {
-          const key = (x) => JSON.stringify([x.brand && 1, x.research && 1, x.concepts.map((c) => c.preview), x.prompts && x.prompts.created, x.builds.length]);
+          const key = (x) => JSON.stringify([x.brand && 1, x.research && 1, x.concepts.map((c) => c.preview), x.prompts && x.prompts.created,
+            (x.prompts?.edits || []).length, (x.prompts?.files || []).length, x.builds.length,
+            (x.photos?.slots || []).map((y) => (y.variants || []).length), (x.videos?.slots || []).map((y) => (y.variants || []).length)]);
           const before = key(S.site); await loadSite(S.site.id);
           if (key(S.site) !== before) render();
         } else if (S.product && S.page === "product") {

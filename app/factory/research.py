@@ -132,8 +132,15 @@ def list_refs(nid=None):
     return sorted([p.name for p in _paths(nid)["refs"].iterdir() if p.suffix.lower() in (".mp4", ".mov", ".m4v", ".webm")])
 
 
+REF_EXT = {".mp4", ".mov", ".m4v", ".webm"}
+
+
 def add_ref(nid, filename: str, data: bytes) -> str:
     safe = "".join(ch for ch in Path(filename).name if ch.isalnum() or ch in "._-") or "ref.mp4"
+    if Path(safe).suffix.lower() not in REF_EXT or safe.startswith("."):
+        raise ValueError("Референс — только видео: mp4, mov, m4v или webm.")
+    if not data:
+        raise ValueError("Пустой файл")
     out = _paths(nid)["refs"] / f"{int(time.time())}_{safe}"
     out.write_bytes(data)
     return out.name
@@ -398,8 +405,10 @@ def analyze_one(job, nid, ref: str, kind: str = "url"):
 
 
 def delete_ref(nid, name: str):
-    f = _paths(nid)["refs"] / Path(name).name
-    if f.exists():
+    f = _paths(nid)["refs"] / Path(str(name)).name
+    if Path(str(name)).name in ("", ".", "..") :
+        raise ValueError("bad name")
+    if f.is_file():
         f.unlink()
     b = _breakdowns(nid)
     b.pop("file:" + Path(name).name, None)

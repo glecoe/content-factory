@@ -1,6 +1,7 @@
 """Paths, settings (.env) and the catalog of video models with prices."""
 from __future__ import annotations
 import os
+import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]          # content-factory/
@@ -28,7 +29,7 @@ ROLES = {
     "site_brand": ("Сайты · бренд-кит", "claude"),
     "site_research": ("Сайты · ресёрч", "claude"),
     "site_strategy": ("Сайты · стратег и превью", "claude"),
-    "site_prompt": ("Сайты · автор промтов", "claude"),
+    "site_prompt": ("Сайты · автор промптов", "claude"),
 }
 
 DEFAULTS = {
@@ -61,9 +62,51 @@ DEFAULTS = {
     "PORT": "8765",
     "AUTH_USER": "admin",
     "AUTH_PASSWORD": "",
+    "ALLOWED_HOSTS": "",         # домены/адреса, по которым открывают студию на сервере (через запятую), напр. studio.example.com
+    "PUBLIC_HTTP": "0",          # 1 = разрешить HOST=0.0.0.0 без HTTPS-прокси (не рекомендуется)
 }
 
 SECRET_KEYS = {"FAL_KEY", "GEMINI_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "APIFY_TOKEN", "AUTH_PASSWORD"}
+
+# Эти настройки меняются ТОЛЬКО руками в .env (или переменными окружения CF_*), не через интерфейс/API:
+# они управляют запуском программ, доступом к файлам и открытием сервера в сеть.
+ENV_ONLY = {"CLAUDE_BIN", "LIBRARY_DIR", "HOST", "PORT", "AUTH_USER", "AUTH_PASSWORD", "ALLOWED_HOSTS", "PUBLIC_HTTP"}
+
+_ENUMS = {"DEMO_MODE": {"0", "1"}, "SITE_SHOTS": {"0", "1"}, "VERTICAL_MODE": {"nb2", "blur", "off"},
+          "MONTAGE_FIT": {"crop", "blur"}, **{f"PROVIDER_{r.upper()}": {"claude", "gemini"} for r in ROLES}}
+_NUMS = {"DAILY_LIMIT_USD": (0, 10000), "USD_RUB": (1, 100000), "CONCEPTS_N": (1, 12), "AUTO_RETRY": (0, 5),
+         "SITE_BUILD_TURNS": (10, 1000), "SITE_BUILD_MINUTES": (10, 240), "SITE_BUILD_RESUMES": (0, 10)}
+_NAMES = {"GEMINI_MODEL", "CLAUDE_MODEL", "SITE_BUILD_MODEL"}
+
+
+def validate_setting(k: str, v) -> str | None:
+    """Проверка значения из интерфейса. Возвращает нормализованную строку или бросает ValueError."""
+    if k not in DEFAULTS or k in ENV_ONLY:
+        raise ValueError(f"Настройку {k} можно менять только в файле .env")
+    v = str(v).strip()
+    if any(c in v for c in "\r\n\x00"):
+        raise ValueError(f"{k}: недопустимые символы")
+    if k in _ENUMS:
+        if v not in _ENUMS[k]:
+            raise ValueError(f"{k}: недопустимое значение")
+    elif k in _NUMS:
+        if v == "":
+            return None                  # пустое поле — не менять
+        try:
+            x = float(v.replace(",", "."))
+        except ValueError:
+            raise ValueError(f"{k}: нужно число") from None
+        lo, hi = _NUMS[k]
+        if not (lo <= x <= hi):
+            raise ValueError(f"{k}: допустимо от {lo} до {hi}")
+        v = str(int(x)) if x == int(x) else str(x)
+    elif k in _NAMES:
+        if v and not re.fullmatch(r"[\w.\-:\[\]/]{1,100}", v):
+            raise ValueError(f"{k}: некорректное имя модели")
+    elif k in SECRET_KEYS:
+        if v and not re.fullmatch(r"[\x21-\x7e]{1,600}", v):
+            raise ValueError(f"{k}: ключ должен быть одной строкой без пробелов")
+    return v
 
 _settings = {}
 
@@ -98,10 +141,16 @@ def save_settings(updates: dict):
     s = settings()
     for k, v in updates.items():
         if k in DEFAULTS and v is not None:
-            s[k] = str(v).strip()
+            v = str(v).strip()
+            if any(c in v for c in "\r\n\x00"):
+                raise ValueError(f"{k}: недопустимые символы")
+            s[k] = v
     lines = ["# Настройки контент-завода. Файл хранится только на этом компьютере/сервере."]
     for k in DEFAULTS:
-        lines.append(f"{k}={s.get(k, '')}")
+        v = str(s.get(k, ""))
+        if os.environ.get("CF_" + k) and k in SECRET_KEYS:
+            continue                     # секрет из окружения сервера не переписываем в файл
+        lines.append(f"{k}={v.replace(chr(13), '').replace(chr(10), '')}")
     ENV_FILE.write_text("\n".join(lines) + "\n", encoding="utf-8")
     try:
         os.chmod(ENV_FILE, 0o600)
@@ -155,6 +204,7 @@ def public_settings():
         "site_build_resumes": int_setting("SITE_BUILD_RESUMES", 3),
         "site_build_model": s.get("SITE_BUILD_MODEL", "sonnet"),
         "host": s.get("HOST"), "port": s.get("PORT"), "auth_user": s.get("AUTH_USER"),
+        "allowed_hosts": s.get("ALLOWED_HOSTS", ""), "env_only": sorted(ENV_ONLY),
     }
 
 
