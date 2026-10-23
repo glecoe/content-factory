@@ -5,7 +5,7 @@ import time
 import uuid
 from pathlib import Path
 
-from . import store, media, llm, gen, montage, brains, publish, library
+from . import store, media, llm, gen, montage, brains, publish, library, stl
 from .config import MUSIC, demo_mode, int_setting, settings, provider
 
 
@@ -37,16 +37,28 @@ def _pdir(pid) -> Path:
 # ------------------------------ Изделие -------------------------------------
 PHOTO_EXT = {".jpg", ".jpeg", ".png", ".heic", ".heif", ".webp", ".tif", ".tiff"}
 VIDEO_EXT = {".mp4", ".mov", ".m4v", ".avi", ".mkv"}
+MODEL_EXT = {".stl"}
 
 
 def add_file(pid: str, filename: str, data: bytes, label: str = "", source: str = "") -> dict:
     d = _pdir(pid)
     safe = "".join(ch for ch in Path(filename).name if ch.isalnum() or ch in "._-") or "file"
     ext = Path(safe).suffix.lower()
-    if ext not in PHOTO_EXT and ext not in VIDEO_EXT:
-        raise ValueError(f"Неподдерживаемый формат: {ext or 'без расширения'}. Фото: jpg/png/heic, видео: mp4/mov.")
+    if ext not in PHOTO_EXT and ext not in VIDEO_EXT and ext not in MODEL_EXT:
+        raise ValueError(f"Неподдерживаемый формат: {ext or 'без расширения'}. Фото: jpg/png/heic, видео: mp4/mov, 3D-модель: stl.")
     raw = d / "inputs" / f"{int(time.time()*1000)}_{safe}"
     raw.write_bytes(data)
+    if ext in MODEL_EXT:
+        # 3D-модель → несколько студийных ракурсов, дальше они работают как обычные фото
+        try:
+            views = stl.render_views(data, d / "prepared", raw.stem)
+        except Exception as e:
+            raw.unlink(missing_ok=True)
+            raise ValueError(str(e) if isinstance(e, stl.STLError) else "Не получилось отрисовать STL — файл повреждён.") from e
+        items = [{"file": f.name, "label": lbl, "orig": raw.name, **({"source": source} if source else {})}
+                 for lbl, f in views]
+        store.update_product(pid, lambda p: p["photos"].extend(items))
+        return {"kind": "model", "photos": items}
     if ext in PHOTO_EXT:
         out = d / "prepared" / (raw.stem + ".jpg")
         try:

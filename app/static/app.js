@@ -108,16 +108,17 @@ function tabItem(t, p) {
       <button class="btn" id="passport" ${brainOK() ? "" : "disabled title='Нужен Claude или Gemini'"}>Составить паспорт по фото · ${who("passport")}</button></div>
   </div>
   <div class="panel"><h2>Съёмка сборщика</h2>
-    <p class="hint">3–4 фото (анфас, профиль, 3/4 сверху, на пальце) и одно видео 10–15 секунд: кольцо на руке, кисть медленно поворачивается. Видео обрежется до 5 секунд — столько стоит обработка.</p>
-    <div class="drop" id="drop">Перетащи сюда фото и видео или нажми, чтобы выбрать файлы
-      <input type="file" id="fileIn" multiple accept="image/*,video/*,.heic,.HEIC" hidden></div>
+    <p class="hint">3–4 фото (анфас, профиль, 3/4 сверху, на пальце) и одно видео 10–15 секунд: кольцо на руке, кисть медленно поворачивается. Видео обрежется до 5 секунд — столько стоит обработка.
+      Есть 3D-модель (.stl)? Загрузи её — завод отрисует 4 студийных ракурса и добавит их как фото.</p>
+    <div class="drop" id="drop">Перетащи сюда фото, видео или 3D-модель (.stl) или нажми, чтобы выбрать файлы
+      <input type="file" id="fileIn" multiple accept="image/*,video/*,.heic,.HEIC,.stl,.STL" hidden></div>
     <div class="row" style="margin-top:10px"><span class="meta">или</span>
       <button class="btn" id="fromLib">Выбрать из библиотеки «По изделиям»</button></div>
     <div class="files" id="files"></div>
   </div>`;
   const files = $("#files");
   p.photos.forEach((ph, i) => files.insertAdjacentHTML("beforeend",
-    `<div class="file"><img src="${fileUrl(p, "prepared", ph.file)}" alt=""><div class="f-foot"><span>фото ${i + 1}</span><button data-k="photo" data-f="${esc(ph.file)}">убрать</button></div></div>`));
+    `<div class="file"><img src="${fileUrl(p, "prepared", ph.file)}" alt=""><div class="f-foot"><span>${ph.label?.startsWith("3D") ? esc(ph.label) : `фото ${i + 1}`}</span><button data-k="photo" data-f="${esc(ph.file)}">убрать</button></div></div>`));
   if (p.video) files.insertAdjacentHTML("beforeend",
     `<div class="file"><video src="${fileUrl(p, "prepared", p.video.file)}" muted loop playsinline autoplay></video><div class="f-foot"><span>видео ${p.video.duration}с</span><button data-k="video" data-f="${esc(p.video.file)}">убрать</button></div></div>`);
   files.querySelectorAll("button").forEach((b) => (b.onclick = async () => {
